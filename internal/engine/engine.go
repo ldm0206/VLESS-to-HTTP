@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/ldm0206/vless-to-http/internal/certpin"
 	"github.com/ldm0206/vless-to-http/internal/config"
 	"github.com/ldm0206/vless-to-http/internal/health"
 	"github.com/ldm0206/vless-to-http/internal/logs"
@@ -27,6 +29,7 @@ type Engine struct {
 	cache  *subscription.Cache
 	logger *logs.Logger
 	prober *health.Prober
+	pins   *certpin.Store
 
 	dataDir   string
 	probeAddr string
@@ -64,6 +67,12 @@ type Engine struct {
 	applyMu  sync.Mutex
 	switchMu sync.Mutex
 
+	// pinning guards against stacking probes for the same node.
+	pinning inflight
+	// stopped is set once the core is shut down. Certificate inspections run
+	// outside the wait group, so they have to check it before applying.
+	stopped atomic.Bool
+
 	wg sync.WaitGroup
 }
 
@@ -87,6 +96,7 @@ func New(store *config.Store, cache *subscription.Cache, logger *logs.Logger, da
 		probeAddr: probeAddr,
 		probePass: probePassword(cfg.Panel.APIToken),
 		prober:    health.New(healthOptions(cfg), logger),
+		pins:      certpin.NewStore(dataDir),
 		ipUser:    map[string]ipOwner{},
 		tagUser:   map[string][]string{},
 		online:    map[string][]string{},
@@ -95,6 +105,12 @@ func New(store *config.Store, cache *subscription.Cache, logger *logs.Logger, da
 		broken:    map[string]string{},
 	}
 	e.prober.SetEndpoint(e.probeAddr, e.probePass)
+	// The pins are read here rather than in Run: a caller is allowed to Apply a
+	// plan before Run, and a plan built without them would drop the pin of
+	// every node that needs one.
+	if err := e.pins.Load(); err != nil {
+		logger.Warnf("读取证书指纹缓存失败：%v", err)
+	}
 	// Health changes are intrinsic to the engine, so the callback is wired
 	// here rather than in Run: an engine driven directly (tests, embedding)
 	// must react to node failures too.
@@ -151,6 +167,7 @@ func (e *Engine) Close() { e.shutdown() }
 
 func (e *Engine) shutdown() {
 	e.wg.Wait()
+	e.stopped.Store(true)
 	e.applyMu.Lock()
 	if e.inst != nil {
 		e.inst.Close()
@@ -172,7 +189,10 @@ func (e *Engine) Apply(reason string) error {
 	cfg := e.store.Get()
 	previousJSON := e.planJSON
 
-	res := resolve(cfg, e.cache.All(), e.prober.Healthy, e.brokenNodes(), e.probeAddr, e.probePass)
+	res := resolve(cfg, e.nodesWithPins(), e.prober.Healthy, e.brokenNodes(), e.probeAddr, e.probePass)
+	// Nodes whose certificate decision is missing or stale are inspected in the
+	// background; their pin, if any, lands in the plan on the next apply.
+	e.ensurePins(res.UsedNodes)
 	raw, err := xraycore.BuildJSON(res.Plan)
 	if err != nil {
 		e.setError(fmt.Errorf("生成内核配置失败：%w", err))
@@ -225,6 +245,7 @@ func (e *Engine) Apply(reason string) error {
 	// Nodes that disappeared from the subscriptions leave the rejection list,
 	// which keeps it from growing across subscription updates.
 	e.forgetMissingBroken()
+	e.forgetMissingPins()
 
 	if broken := e.brokenNodes(); len(broken) > 0 {
 		for id, reason := range broken {

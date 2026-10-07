@@ -111,9 +111,14 @@ func (n *Node) streamSettings() map[string]any {
 		}
 	case n.TLS || n.Type == "trojan":
 		tls := map[string]any{
-			"allowInsecure": n.SkipCertVerify,
-			"serverName":    n.SNI,
-			"fingerprint":   orDefault(n.Fingerprint, "chrome"),
+			"serverName":  n.SNI,
+			"fingerprint": orDefault(n.Fingerprint, "chrome"),
+		}
+		// Xray removed "allowInsecure" and now refuses any config that still
+		// carries it, so a subscription asking to skip verification is served
+		// by pinning the certificate instead. See internal/certpin.
+		if n.PinnedCertSha256 != "" {
+			tls["pinnedPeerCertSha256"] = n.PinnedCertSha256
 		}
 		if len(n.ALPN) > 0 {
 			tls["alpn"] = toAnySlice(n.ALPN)

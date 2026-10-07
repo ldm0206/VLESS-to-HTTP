@@ -17,6 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/ldm0206/vless-to-http/internal/certpin"
 	"github.com/ldm0206/vless-to-http/internal/config"
 	"github.com/ldm0206/vless-to-http/internal/logs"
 	"github.com/ldm0206/vless-to-http/internal/node"
@@ -420,6 +421,60 @@ func TestEngineDropsNodesTheCoreRejects(t *testing.T) {
 		if status.ID == bad.ID && !strings.Contains(status.Unsupported, "内核拒绝") {
 			t.Fatalf("node status does not explain the rejection: %+v", status)
 		}
+	}
+}
+
+// TestInsecureNodeReachesTheCorePinned is the fix for Xray's removal of
+// allowInsecure end to end: a node whose subscription asks for verification to
+// be skipped has to reach the core as a pinned certificate, and the removed
+// field must never appear in the generated config.
+func TestInsecureNodeReachesTheCorePinned(t *testing.T) {
+	target := node.Node{
+		Name: "固定证书节点", Type: "vless", Server: "cdn.example.com", Port: 443,
+		UUID: testUUID, Network: "tcp", TLS: true, SNI: "cdn.example.com",
+		SkipCertVerify: true,
+	}
+	target.Normalize()
+
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Panel.Listen = "127.0.0.1:0"
+	cfg.Proxy.HTTP = config.Listener{Enabled: false}
+	cfg.Proxy.SOCKS = config.SocksListener{Enabled: false}
+	cfg.Health.Enabled = false
+	cfg.Subscriptions = []config.Subscription{{ID: "sub_1", Name: "订阅", Kind: "auto", Enabled: true}}
+	cfg.Users = []config.User{{
+		ID: "usr_1", Name: "alice", Password: "pw", Enabled: true,
+		Mode: config.ModeFixed, Fallback: config.FallbackInherit,
+		Targets: []config.Target{{Sub: "sub_1", Node: target.Name}},
+	}}
+
+	store := writeConfig(t, dir, cfg)
+	cache := subscription.NewCache(dir)
+	if err := cache.Set("sub_1", []node.Node{target}, "clash"); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	// Stand in for a finished inspection, so the test does not need a real
+	// server presenting the certificate.
+	pin := strings.Repeat("cd", 32)
+	pins := certpin.NewStore(dir)
+	if err := pins.Put(target.ID, certpin.Entry{Sha256: pin, Checked: time.Now()}); err != nil {
+		t.Fatalf("seed pin: %v", err)
+	}
+
+	eng := New(store, cache, newTestLogger(t), dir)
+	if err := eng.Apply("测试"); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	defer eng.Close()
+
+	plan := eng.PlanJSON()
+	if !strings.Contains(plan, `"pinnedPeerCertSha256": "`+pin+`"`) {
+		t.Fatalf("the pin did not reach the core config:\n%s", plan)
+	}
+	if strings.Contains(plan, "allowInsecure") {
+		t.Fatalf("the removed allowInsecure field is still emitted:\n%s", plan)
 	}
 }
 

@@ -166,7 +166,7 @@ git -c http.proxy=socks5h://alice:secret123@127.0.0.1:1080 clone https://github.
 
 - 协议：`vless`、`vmess`、`trojan`、`ss`、`socks`、`http`
 - 传输层：`tcp`、`ws`、`grpc`、`h2`（Clash 里写作 `http`）、`httpupgrade`、`xhttp`
-- 安全层：TLS（含 SNI / ALPN / fingerprint / allowInsecure）、REALITY（public key / short id / spiderX）、vmess 的 alterId 与各种加密
+- 安全层：TLS（含 SNI / ALPN / fingerprint）、REALITY（public key / short id / spiderX）、vmess 的 alterId 与各种加密
 - Shadowsocks 加密方式：`aes-128-gcm`、`aes-256-gcm`、`chacha20-ietf-poly1305`、`xchacha20-ietf-poly1305`、`none`、`2022-blake3-aes-128-gcm`、`2022-blake3-aes-256-gcm`、`2022-blake3-chacha20-poly1305`
 
 **会被跳过**（订阅依然能更新，只是这些节点不参与选路；面板「节点」页会写明原因）：
@@ -182,6 +182,11 @@ git -c http.proxy=socks5h://alice:secret123@127.0.0.1:1080 clone https://github.
 | Clash 里的 `direct` 策略组 | 那是直连策略，不是真实节点 |
 
 健康检查对不支持的节点不会去测，`v2h node list --usable` 可以把它们过滤掉。
+
+订阅里要求跳过证书校验的节点（`allowInsecure=1`、`insecure=1`、`skip-cert-verify: true`）不属于被跳过的一类：Xray 内核
+已经删掉了 `allowInsecure`，改为 `pinnedPeerCertSha256`。这类节点会在后台被探测一次证书，能正常校验的什么都不做（免得
+证书续期后就失联），确实校验不了的才把叶子证书的指纹固定下来写进内核配置。证书换新后最多一小时会自动重新探测，期间
+该节点会失效并由健康检查切走。
 
 ---
 

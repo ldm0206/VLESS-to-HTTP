@@ -32,7 +32,7 @@ func (e *Engine) startWithRetry(cfg *config.Config, res *resolution, raw []byte)
 
 		// Rebuild without the rejected node and note the new resolution: the
 		// caller stores it as the state the running core reflects.
-		res = resolve(cfg, e.cache.All(), e.prober.Healthy, e.brokenNodes(), e.probeAddr, e.probePass)
+		res = resolve(cfg, e.nodesWithPins(), e.prober.Healthy, e.brokenNodes(), e.probeAddr, e.probePass)
 		raw, buildErr := xraycore.BuildJSON(res.Plan)
 		if buildErr != nil {
 			return nil, res, raw, buildErr

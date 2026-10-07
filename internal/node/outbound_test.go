@@ -2,6 +2,7 @@ package node
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -121,6 +122,67 @@ func TestFlowDroppedOnNonTCP(t *testing.T) {
 	user := dig(t, ob, "settings", "vnext").([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
 	if _, ok := user["flow"]; ok {
 		t.Fatalf("flow should be dropped for ws transport: %v", user)
+	}
+}
+
+// TestInsecureNodePinsCertificate covers the removal of allowInsecure: the core
+// refuses any config that still carries the field, so a subscription asking to
+// skip verification is served by pinning the certificate instead.
+func TestInsecureNodePinsCertificate(t *testing.T) {
+	pin := strings.Repeat("ab", 32)
+	pinned := Node{
+		Name: "cdn", Type: "vless", Server: "cdn.example.com", Port: 443,
+		UUID: "49b4b82b-73f0-4772-86ca-ca5059375c63",
+		TLS:  true, SNI: "cdn.example.com", SkipCertVerify: true,
+		PinnedCertSha256: pin,
+	}
+	pinned.Normalize()
+
+	tls := dig(t, decode(t, pinned), "streamSettings", "tlsSettings").(map[string]any)
+	if tls["pinnedPeerCertSha256"] != pin {
+		t.Fatalf("pin missing from tlsSettings: %v", tls)
+	}
+	if _, ok := tls["allowInsecure"]; ok {
+		t.Fatalf("allowInsecure must never be emitted: %v", tls)
+	}
+
+	// Before a pin is resolved the node falls back to normal verification
+	// rather than emitting a field the core rejects.
+	unpinned := pinned
+	unpinned.Name = "cdn-2"
+	unpinned.PinnedCertSha256 = ""
+	unpinned.Normalize()
+
+	tls = dig(t, decode(t, unpinned), "streamSettings", "tlsSettings").(map[string]any)
+	if _, ok := tls["allowInsecure"]; ok {
+		t.Fatalf("allowInsecure must never be emitted: %v", tls)
+	}
+	if _, ok := tls["pinnedPeerCertSha256"]; ok {
+		t.Fatalf("nothing should be pinned before the server was inspected: %v", tls)
+	}
+}
+
+// TestNeedsCertPinOnlyForTLSNodes keeps the engine from probing hosts that will
+// never carry a pin: REALITY authenticates the server itself, and a plaintext
+// transport has no certificate to pin.
+func TestNeedsCertPinOnlyForTLSNodes(t *testing.T) {
+	cases := []struct {
+		name string
+		node Node
+		want bool
+	}{
+		{"insecure vless tls", Node{Type: "vless", TLS: true, SkipCertVerify: true}, true},
+		{"insecure trojan", Node{Type: "trojan", SkipCertVerify: true}, true},
+		{"verified tls", Node{Type: "vless", TLS: true}, false},
+		{"reality", Node{Type: "vless", TLS: true, SkipCertVerify: true, RealityPublicKey: "key"}, false},
+		{"plaintext ws", Node{Type: "vless", Network: "ws", SkipCertVerify: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.node.NeedsCertPin(); got != tc.want {
+				t.Fatalf("NeedsCertPin() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

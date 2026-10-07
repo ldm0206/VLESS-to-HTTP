@@ -32,6 +32,12 @@ type Node struct {
 	SkipCertVerify bool     `json:"skip_cert_verify,omitempty"`
 	Fingerprint    string   `json:"fingerprint,omitempty"`
 
+	// PinnedCertSha256 is the hex SHA-256 of the certificate the server
+	// presents, filled in by the engine for nodes whose subscription asks for
+	// verification to be skipped. Xray removed allowInsecure in favour of this,
+	// so without a pin such a node cannot be dialled at all.
+	PinnedCertSha256 string `json:"pinned_cert_sha256,omitempty"`
+
 	RealityPublicKey string `json:"reality_public_key,omitempty"`
 	RealityShortID   string `json:"reality_short_id,omitempty"`
 	RealitySpiderX   string `json:"reality_spider_x,omitempty"`
@@ -190,6 +196,16 @@ func computeID(n *Node) string {
 		n.Network, n.Path, n.SNI, n.Cipher,
 	}, "|")))
 	return hex.EncodeToString(h[:])[:12]
+}
+
+// NeedsCertPin reports whether the node asks for certificate verification to
+// be skipped, which makes it a candidate for pinning. REALITY authenticates the
+// server by itself and never reaches the TLS settings that carry the pin.
+func (n *Node) NeedsCertPin() bool {
+	if !n.SkipCertVerify || n.RealityPublicKey != "" {
+		return false
+	}
+	return n.TLS || n.Type == "trojan"
 }
 
 // Label is the display form used in logs and the panel.

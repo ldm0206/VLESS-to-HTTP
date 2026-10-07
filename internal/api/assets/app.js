@@ -1982,6 +1982,14 @@
         class: 'cell-sub danger-text', title: node.health.last_error
       }, [truncate(node.health.last_error, 42)]));
     }
+    // A node whose subscription asks for certificate verification to be
+    // skipped is trusted by pinning the certificate it presented.
+    if (node.pinned_cert_sha256) {
+      name.appendChild(el('div', {
+        class: 'cell-sub',
+        title: '已固定证书指纹：' + node.pinned_cert_sha256
+      }, ['已固定证书 ' + node.pinned_cert_sha256.slice(0, 12) + '…']));
+    }
 
     return el('tr', { class: unsupported ? 'row-unsupported' : '' }, [
       el('td', {}, [name]),
