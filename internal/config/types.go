@@ -107,6 +107,10 @@ type Subscription struct {
 	LastStatus string    `yaml:"last_status" json:"last_status"` // ok | error | never
 	LastError  string    `yaml:"last_error" json:"last_error"`
 	NodeCount  int       `yaml:"node_count" json:"node_count"`
+	// UserInfo is the quota the provider reported when the subscription was
+	// last fetched. It stays empty for local imports and for providers that
+	// report nothing.
+	UserInfo SubUserInfo `yaml:"user_info" json:"user_info"`
 }
 
 // User is a proxy client: one username/password pair plus the servers it may

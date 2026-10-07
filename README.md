@@ -116,6 +116,7 @@ curl --socks5-hostname alice:secret123@127.0.0.1:1080 https://api.ipify.org
 | **模式（mode）** | 账号怎么在这些目标里挑节点，三种：priority / auto / fixed。 |
 | **兜底策略（fallback）** | 所有目标都不可用时怎么办：`reject`（拒绝连接，默认）或 `direct`（直连）。账号可以单独设置，也可以跟随全局 `proxy.fallback`。 |
 | **健康检查** | 后台按 `health.interval` 通过每个节点请求一次 `health.probe_url`，连续失败 `health.failures` 次标记为不可用，连续成功 `health.successes` 次恢复。priority 模式的切换由它驱动。 |
+| **剩余流量** | 机场在订阅响应头 `subscription-userinfo` 里报的账户配额，每次更新订阅时一并读取。面板「订阅」页、TUI 和 `v2h sub list` 会显示剩余量、已用量和到期日；`total=0` 是不限量，机场不报就是 `—`。 |
 
 ### 三种选路模式
 
@@ -340,7 +341,7 @@ v2h core config                          # 看内核实际拿到的配置（排�
 
 ### `subscriptions` / `users` / `revision`
 
-- `subscriptions[]`：`name`（唯一，账号里用它引用）、`url`、`kind`（`auto` / `clash` / `v2ray`）、`interval`（默认 `12h`）、`enabled`、`user_agent`；`id` / `last_update` / `last_status` / `last_error` / `node_count` 由程序维护。
+- `subscriptions[]`：`name`（唯一，账号里用它引用）、`url`、`kind`（`auto` / `clash` / `v2ray`）、`interval`（默认 `12h`）、`enabled`、`user_agent`；`id` / `last_update` / `last_status` / `last_error` / `node_count` / `user_info` 由程序维护，其中 `user_info` 是机场报的配额（`upload` / `download` / `total` / `expire`，单位字节，`expire` 是 Unix 秒）。
 - `users[]`：`name`（不能含空格、制表符、换行、冒号）、`password`（明文）、`enabled`、`mode`（`priority` / `auto` / `fixed`）、`fallback`（`inherit` / `reject` / `direct`）、`note`、`targets[]`（`sub` 写订阅名或订阅 id、`node`、`all`、`limit`）、`created_at`；`traffic` 由程序维护。
 - `revision`：每次成功保存 +1，用来判断配置是否已经应用到内核；手改文件时一般不用动它。
 

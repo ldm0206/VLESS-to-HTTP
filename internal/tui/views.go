@@ -414,6 +414,7 @@ func (m *model) viewSubs(w, h int) string {
 		{title: "状态", prio: 3, flex: true},
 		{title: "节点数", prio: 2},
 		{title: "可用", prio: 2},
+		{title: "剩余流量", prio: 2},
 		{title: "上次更新", prio: 1},
 	}
 	rows := make([][]string, 0, len(m.subs))
@@ -425,6 +426,7 @@ func (m *model) viewSubs(w, h int) string {
 			status,
 			fmt.Sprint(s.CachedNodes),
 			fmt.Sprint(s.CachedUsable),
+			client.SubTrafficLabel(s.UserInfo),
 			relativeTime(s.LastUpdate),
 		})
 	}

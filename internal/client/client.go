@@ -460,6 +460,22 @@ func FormatBytes(n int64) string {
 	return fmt.Sprintf("%.2f EB", value/unit)
 }
 
+// SubTrafficLabel describes what is left of the quota a provider reported.
+// Panels are free not to report one, and an empty total means the plan is
+// unlimited rather than empty.
+func SubTrafficLabel(info config.SubUserInfo) string {
+	switch {
+	case !info.Known():
+		return "—"
+	case info.Total <= 0:
+		return "无限"
+	case info.Remaining() <= 0:
+		return "已用尽"
+	default:
+		return FormatBytes(info.Remaining())
+	}
+}
+
 // SubModeLabel describes a subscription's format setting.
 func SubModeLabel(kind string) string {
 	switch kind {

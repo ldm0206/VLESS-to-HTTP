@@ -236,10 +236,10 @@ func (e *Engine) RefreshSubscription(ctx context.Context, id string) error {
 		return fmt.Errorf("订阅「%s」没有填写链接", sub.Name)
 	}
 
-	raw, err := subscription.Fetch(ctx, sub.URL, sub.UserAgent)
+	payload, err := subscription.Fetch(ctx, sub.URL, sub.UserAgent)
 	if err == nil {
 		var result subscription.Result
-		result, err = subscription.Parse(raw, sub.Kind)
+		result, err = subscription.Parse(payload.Body, sub.Kind)
 		if err == nil {
 			if serr := e.cache.Set(sub.ID, result.Nodes, result.Format); serr != nil {
 				e.logger.Warnf("写入订阅缓存失败：%v", serr)
@@ -252,6 +252,9 @@ func (e *Engine) RefreshSubscription(ctx context.Context, id string) error {
 					target.LastStatus = "ok"
 					target.LastError = ""
 					target.NodeCount = len(result.Nodes)
+					// Store what this fetch reported, so a provider that stops
+					// sending the header stops showing a stale quota.
+					target.UserInfo = payload.UserInfo
 				}
 				return nil
 			})

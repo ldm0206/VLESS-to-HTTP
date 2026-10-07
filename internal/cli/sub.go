@@ -62,7 +62,7 @@ func runSubList(g globals, args []string) int {
 		fmt.Println(`  v2h sub add "机场A" --url "https://example.com/sub?token=xxx"`)
 		return 0
 	}
-	t := newTable("订阅", "格式", "状态", "节点", "可用", "更新间隔", "上次更新")
+	t := newTable("订阅", "格式", "状态", "节点", "可用", "剩余流量", "更新间隔", "上次更新")
 	for _, s := range subs {
 		status := "正常"
 		switch {
@@ -82,7 +82,7 @@ func runSubList(g globals, args []string) int {
 			interval = "仅本地"
 		}
 		t.add(s.Name, client.SubModeLabel(s.Kind), status, fmt.Sprint(s.CachedNodes),
-			fmt.Sprint(s.CachedUsable), interval, updated)
+			fmt.Sprint(s.CachedUsable), client.SubTrafficLabel(s.UserInfo), interval, updated)
 	}
 	t.render(os.Stdout)
 	return 0

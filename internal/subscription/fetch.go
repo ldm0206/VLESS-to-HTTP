@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/ldm0206/vless-to-http/internal/config"
 )
 
 // DefaultUserAgent looks like a Clash client so providers hand back the YAML
@@ -57,35 +59,46 @@ func stripURL(err error) error {
 	return err
 }
 
-// Fetch downloads a subscription URL and returns the raw body.
-func Fetch(ctx context.Context, url, userAgent string) ([]byte, error) {
+// Payload is a downloaded subscription: the node list plus whatever the
+// provider reported about the account in its response headers.
+type Payload struct {
+	Body     []byte
+	UserInfo config.SubUserInfo
+}
+
+// Fetch downloads a subscription URL.
+func Fetch(ctx context.Context, url, userAgent string) (Payload, error) {
 	if userAgent == "" {
 		userAgent = DefaultUserAgent
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("构造请求失败：%s：%w", redactURL(url), stripURL(err))
+		return Payload{}, fmt.Errorf("构造请求失败：%s：%w", redactURL(url), stripURL(err))
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "*/*")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("请求失败：%s：%w", redactURL(url), stripURL(err))
+		return Payload{}, fmt.Errorf("请求失败：%s：%w", redactURL(url), stripURL(err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("服务端返回 %s", resp.Status)
+		return Payload{}, fmt.Errorf("服务端返回 %s", resp.Status)
 	}
+
+	// The quota rides along with the node list. A provider that sends no header
+	// leaves this empty, which the panel shows as "not reported".
+	userInfo, _ := config.ParseSubUserInfo(resp.Header.Get("subscription-userinfo"))
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
 	if err != nil {
-		return nil, fmt.Errorf("读取响应失败：%w", err)
+		return Payload{}, fmt.Errorf("读取响应失败：%w", err)
 	}
 	if len(body) == 0 {
-		return nil, fmt.Errorf("订阅返回了空内容")
+		return Payload{}, fmt.Errorf("订阅返回了空内容")
 	}
-	return body, nil
+	return Payload{Body: body, UserInfo: userInfo}, nil
 }

@@ -88,6 +88,10 @@
     return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' +
       pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
   }
+  function fmtDay(ms) {
+    var d = new Date(ms);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
 
   function fmtClock(t) {
     var d = parseTime(t);
@@ -1582,12 +1586,14 @@
 
   function renderSubs(root) {
     subRefs = { tbody: el('tbody') };
-    var table = el('table', { class: 'data' }, [
+    var table = el('table', { class: 'data fixed' }, [
+      colgroup([20, 8, 7, 8, 18, 14, 8, 17]),
       el('thead', {}, [el('tr', {}, [
         el('th', {}, ['名称']),
         el('th', {}, ['状态']),
         el('th', {}, ['格式']),
         el('th', { class: 'num' }, ['节点数']),
+        el('th', {}, ['流量']),
         el('th', {}, ['上次更新']),
         el('th', {}, ['启用']),
         el('th', { class: 'num' }, ['操作'])
@@ -1616,10 +1622,36 @@
     if (!subRefs || !subRefs.tbody.isConnected) return;
     var subs = state.subs || [];
     if (!subs.length) {
-      subRefs.tbody.replaceChildren(emptyRow(7, '还没有订阅。点击「新建订阅」或「粘贴导入」添加第一个。'));
+      subRefs.tbody.replaceChildren(emptyRow(8, '还没有订阅。点击「新建订阅」或「粘贴导入」添加第一个。'));
       return;
     }
     subRefs.tbody.replaceChildren.apply(subRefs.tbody, subs.map(subRow));
+  }
+
+  // Providers report the account quota in a response header; what is left of it
+  // is what decides whether the subscription keeps working.
+  function subTrafficCell(sub) {
+    var info = sub.user_info || {};
+    var used = (info.upload || 0) + (info.download || 0);
+    var total = info.total || 0;
+    if (!used && !total && !info.expire) {
+      return el('span', { class: 'muted' }, ['—']);
+    }
+
+    var rows;
+    if (total > 0) {
+      var left = Math.max(0, total - used);
+      // A nearly spent quota is worth colouring: at zero the nodes stop working.
+      rows = [el('div', {
+        class: left / total <= 0.1 ? 'danger-text' : ''
+      }, [left > 0 ? '剩余 ' + fmtBytes(left) : '流量已用尽'])];
+      rows.push(el('div', { class: 'cell-sub' }, ['已用 ' + fmtBytes(used) + ' / ' + fmtBytes(total)]));
+    } else {
+      rows = [el('div', {}, ['无限流量'])];
+      rows.push(el('div', { class: 'cell-sub' }, ['已用 ' + fmtBytes(used)]));
+    }
+    if (info.expire) rows.push(el('div', { class: 'cell-sub' }, [fmtDay(info.expire * 1000) + ' 到期']));
+    return el('div', {}, rows);
   }
 
   function subRow(sub) {
@@ -1664,6 +1696,7 @@
         el('div', {}, [(sub.cached_usable || 0) + ' / ' + (sub.cached_nodes || 0)]),
         el('div', { class: 'cell-sub num' }, ['可用 / 缓存'])
       ]),
+      el('td', {}, [subTrafficCell(sub)]),
       el('td', {}, [
         el('div', {}, [updated]),
         el('div', { class: 'cell-sub' }, [interval ? '每 ' + fmtInterval(interval) + '自动更新' : '不自动更新'])
