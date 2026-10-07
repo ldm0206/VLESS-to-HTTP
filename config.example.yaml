@@ -1,0 +1,283 @@
+# ===========================================================================
+# v2h 配置参考（示例文件，不是程序实际读取的文件）
+#
+# 实际配置在数据目录下的 config.yaml：
+#   docker：  ./data/config.yaml
+#   本地：    ./data/config.yaml 或 /data/config.yaml（可用 V2H_DATA_DIR 覆盖）
+# 首次启动会自动生成，里面的默认值和下面标注的一致。
+#
+# 重要：
+#   * 面板和 CLI 保存配置时会整体重写这个文件，注释和排版不会保留。
+#     想把注释留着，就别用面板改配置。
+#   * users[].password 是明文（Xray 认证需要原文），所以 config.yaml 落盘权限是
+#     0600，不要把数据目录提交到 git 或共享出去。
+#   * 大部分字段在面板「设置」页 / `v2h config set` 里都能改，下面逐项标了
+#     「面板可改」「面板不可改」。
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# panel —— 控制面板与 HTTP API（端口 9080）
+# ---------------------------------------------------------------------------
+panel:
+  # 面板监听地址。默认监听所有网卡；只想本机访问就改成 127.0.0.1:9080。
+  # 面板可改。
+  listen: "0.0.0.0:9080"
+
+  # 面板对外访问地址，例如 Cloudflare Tunnel 或反向代理暴露的域名。
+  # 留空表示不指定。面板可改。
+  public_url: ""
+
+  admin:
+    # 面板登录用户名。面板不可改（改这个要手工编辑文件）。
+    username: admin
+
+    # bcrypt 哈希（$2a$12$...），不是明文。用 `v2h admin passwd`、
+    # 首次启动时设置 V2H_ADMIN_PASSWORD 环境变量，或在面板「设置」里改密码来生成。
+    # 留空时首次启动会生成随机密码，并只在日志里打印一次。
+    # 面板可改（设置里改密码），也可以设置环境变量 V2H_ADMIN_PASSWORD。
+    password_hash: ""
+
+    # Cloudflare Turnstile：给登录页加人机验证。
+    # 面板可改（设置 → Cloudflare Turnstile）。
+    turnstile:
+      enabled: false
+      # Cloudflare 后台建站点时拿到的 Site Key 和 Secret Key。
+      site_key: ""
+      secret_key: ""
+      # true = Cloudflare 校验接口不可用时放行登录；false = 拒绝登录。
+      # 公网暴露的面板建议保持 false（默认）。
+      fail_open: false
+
+  # 登录会话有效期（小时）。默认 12。面板可改。
+  session_hours: 12
+
+  # 允许用 `Authorization: Bearer <panel.api_token>` 调用 API 的来源网段。
+  # 默认只允许回环地址，所以 `docker exec -it v2h v2h status` 能直接用。
+  # 不要为了图省事写成 0.0.0.0/0——那等于把完整控制权暴露出去。
+  # 面板可改。
+  token_ips:
+    - 127.0.0.1/8
+    - ::1/128
+
+  # 信任的反向代理网段：只有来自这些地址的请求，X-Forwarded-For / X-Real-IP
+  # 才会被采信（用于记录真实客户端 IP 与会话判断）。
+  # 直接暴露或经过隧道时保持默认；用 Nginx 反代时填代理所在网段。
+  # 面板可改。
+  trusted_proxies:
+    - 127.0.0.1/8
+    - ::1/128
+
+  # API Token（32 字节十六进制）。首次启动自动生成，面板不可改，
+  # 用 `v2h admin token` 或在设置页轮换；CLI/TUI 从文件里读它。
+  api_token: ""
+
+  # 面板主题：auto（跟随系统）/ light / dark。面板可改。
+  theme: auto
+
+# ---------------------------------------------------------------------------
+# proxy —— 客户端连进来的两个入口，以及内核的通用行为
+# ---------------------------------------------------------------------------
+proxy:
+  # HTTP 代理入口（支持 CONNECT，HTTPS 走这里）。
+  # 容器里默认 8080，docker-compose 把它映射到宿主的 9000。
+  # 面板可改。
+  http:
+    enabled: true
+    listen: "0.0.0.0:8080"
+
+  # SOCKS5 入口。
+  socks:
+    enabled: true
+    listen: "0.0.0.0:1080"
+    # 是否允许 SOCKS5 的 UDP ASSOCIATE。
+    udp: true
+
+  # 流量嗅探：从连接里识别目标域名（http/tls），供 custom_rules 按域名分流。
+  # 面板可改。
+  sniffing: true
+
+  # 全局兜底策略，当某个账号的目标节点全部不可用时生效：
+  #   reject = 直接拒绝连接（默认，安全）
+  #   direct = 退回直连（流量会从本机出口出去，除非你清楚在做什么，否则别开）
+  # 账号自己的 fallback 可以覆盖它（见 users[].fallback）。面板可改。
+  fallback: reject
+
+  # 内核使用的 DNS 服务器，例如 ["1.1.1.1", "https://dns.google/dns-query"]。
+  # 留空表示用系统 DNS。面板可改。
+  dns_servers: []
+
+  # 自定义路由规则，原样插入 Xray 的 routing.rules，排在「按账号分流」之前，
+  # 所以可以用域名规则把某些流量从账号的节点上摘出去。例如：
+  #   custom_rules:
+  #     - type: field
+  #       domain: ["geosite:cn"]
+  #       outboundTag: direct
+  #     - type: field
+  #       ip: ["geoip:private"]
+  #       outboundTag: direct
+  # 目前只能手工编辑文件（面板不提供编辑器）。面板不可改。
+  custom_rules: []
+
+  # 连接空闲/握手超时，写法为 Go 的 duration："300s"、"5m"。面板可改。
+  timeout: 300s
+
+# ---------------------------------------------------------------------------
+# logs —— 文件日志（轮转）与面板/TUI 读的内存环形缓冲
+# ---------------------------------------------------------------------------
+logs:
+  # debug / info / warning / error / none。面板可改。
+  level: info
+
+  # 是否记录每条连接（访问日志）。关掉只会少记访问行，不影响到其他日志。
+  # 面板可改。
+  access_log: true
+
+  # 日志目录。相对路径相对于数据目录，默认 logs/（即 /data/logs）。
+  # 面板可改。
+  dir: logs
+
+  # 单个日志文件达到多少 MB 就轮转。面板可改。
+  max_size_mb: 50
+
+  # 保留多少个历史文件（v2h.log.1、v2h.log.2 …）。面板可改。
+  max_backups: 3
+
+  # 内存里保留多少条日志给面板/TUI 实时查看（不落盘）。面板可改。
+  ring_size: 2000
+
+  # 是否同时输出到容器标准输出（docker logs 看得到）。面板可改。
+  console: true
+
+# ---------------------------------------------------------------------------
+# health —— 节点健康检查（决定 priority 模式的切换）
+# ---------------------------------------------------------------------------
+health:
+  # 关掉之后 priority 模式不再探测节点（已建立的选路保持不变），
+  # auto 模式的延迟测速也失去数据来源。面板可改。
+  enabled: true
+
+  # 探测用的 URL，应当返回 204/200 且体积很小。面板可改。
+  probe_url: "https://www.gstatic.com/generate_204"
+
+  # 探测间隔。也被 auto 模式的 balancer 用作测速间隔（最长按 60s 计）。
+  # 面板可改。
+  interval: 30s
+
+  # 单次探测超时。面板可改。
+  timeout: 5s
+
+  # 连续失败多少次算「不可用」（触发 priority 切换）。面板可改。
+  failures: 2
+
+  # 连续成功多少次算「恢复」。面板可改。
+  successes: 1
+
+  # 两次健康检查触发的切换之间至少间隔多久，防止节点抖动导致内核反复重启。
+  # 面板可改。
+  switch_cooldown: 15s
+
+  # 最多给多少个节点建探测出口（账号用到的节点优先，超出部分不探测）。
+  # 面板可改。
+  max_probes: 64
+
+# ---------------------------------------------------------------------------
+# subscriptions —— 订阅列表（面板「订阅」页 / v2h sub … 维护）
+# ---------------------------------------------------------------------------
+# id/last_update/last_status/last_error/node_count 由程序自己写入，
+# 手写配置时可以省略，留空会补默认值。
+subscriptions:
+  - id: sub_ab12cd34
+    # 订阅名，账号的目标里用它引用（也必须唯一）。面板可改。
+    name: "机场A"
+    # Clash(mihomo) YAML 或 base64 节点链接的地址。
+    # 纯本地导入（v2h sub import）时为空。面板可改。
+    url: "https://example.com/sub?token=xxx"
+    # 格式：auto（自动识别，默认）/ clash / v2ray。面板可改。
+    kind: auto
+    # 自动更新间隔，Go duration 写法。面板可改。
+    interval: 12h
+    # 停用后不再自动更新（已有节点还在缓存里）。面板可改。
+    enabled: true
+    # 拉取时使用的 User-Agent，留空用内置默认值。面板可改。
+    user_agent: ""
+    # ---- 以下字段由程序维护（面板只展示）----
+    last_update: 2026-01-01T00:00:00Z
+    last_status: never # ok | error | never
+    last_error: ""
+    node_count: 0
+
+  # 第二条订阅：用 `v2h sub import 机场B --file nodes.yaml` 或面板「粘贴导入」
+  # 建出来的订阅没有链接，url 留空，也不会被自动更新，节点长期留在缓存里。
+  - id: sub_ef56gh78
+    name: "机场B"
+    url: ""
+    kind: auto
+    interval: 0s
+    enabled: true
+    user_agent: ""
+    last_update: 2026-01-01T00:00:00Z
+    last_status: ok
+    last_error: ""
+    node_count: 5
+
+# ---------------------------------------------------------------------------
+# users —— 代理账号（面板「账号」页 / v2h user … 维护）
+# ---------------------------------------------------------------------------
+users:
+  - id: usr_ab12cd34
+    # 用户名，客户端在 HTTP/SOCKS5 里用的那个名字。
+    # 不能含空格、制表符、换行或冒号。面板可改。
+    name: alice
+    # 明文密码（Xray 认证需要原文）。面板可改。
+    password: "change-me"
+    # 停用后该账号的连接全部被拒绝。面板可改。
+    enabled: true
+    # 选路模式：
+    #   priority = 按 targets 顺序选第一个健康节点（默认）
+    #   auto     = 交给内核在 targets 集合里自动测速选最低延迟，切换不断连接
+    #   fixed    = 固定用 targets 里的第一个节点，不做健康切换
+    # 面板可改。
+    mode: priority
+    # 这个账号的兜底策略：inherit（跟随 proxy.fallback，默认）/ reject / direct。
+    # 面板可改。
+    fallback: inherit
+    # 备注。面板可改。
+    note: ""
+    # 目标列表，顺序就是 priority 模式的优先级。
+    targets:
+      # 引用某条订阅里的一个节点。sub 写订阅名或订阅 id 都行（保存时会规范成 id）。
+      - sub: "机场A"
+        node: "香港01"
+        all: false
+        limit: 0
+      # 用 all: true 表示整条订阅；limit 限制最多取多少个节点（0 = 不限）。
+      - sub: "机场B"
+        node: ""
+        all: true
+        limit: 5
+    # ---- 以下字段由程序维护（面板只展示/可重置）----
+    # 累计流量，重启内核不丢。
+    traffic:
+      up: 0
+      down: 0
+    # 创建时间。
+    created_at: 2026-01-01T00:00:00Z
+
+# ---------------------------------------------------------------------------
+# revision —— 每次成功保存 +1，用来判断配置是否已经应用到内核。
+# 手工改文件时不要动它（除非你想强制触发一次重载，那就 +1）。
+# ---------------------------------------------------------------------------
+revision: 0
+
+# ===========================================================================
+# 补充说明
+# ===========================================================================
+# * 端口：容器内监听地址由本文件决定（panel.listen / proxy.http.listen /
+#   proxy.socks.listen），docker-compose.yml 里的 9000:8080、1080:1080、
+#   9080:9080 只是宿主机到容器的映射。改了这边的端口，记得同步改映射。
+# * 谁在改这个文件：面板「设置」页写 panel / proxy（不含 custom_rules）/
+#   logs / health；账号页写 users；订阅页写 subscriptions；
+#   `v2h config set <键> <值>` 等价于面板设置页。改完立即生效，
+#   内核会按需重建（切换 priority 节点时会短暂重启内核）。
+# * 权限：本文件是 0600，因为它含明文代理密码与 API Token。
+# ===========================================================================

@@ -1,0 +1,42 @@
+# 构建镜像只需要源码、go.mod、go.sum 和 internal/api/assets 里的前端资源。
+# 其他东西一概不进构建上下文（也因此不会冲掉 Docker 的层缓存）。
+
+# --- 版本控制 / CI ---
+.git
+.gitignore
+.github/
+
+# --- 本地运行数据（不要打进镜像）---
+data/
+tmpdata*/
+data-*/
+logs/
+*.log
+*.log.*
+
+# --- 构建产物 ---
+v2h
+v2h.exe
+dist/
+build/
+*.exe
+
+# --- 文档与示例（编译用不到）---
+*.md
+config.example.yaml
+docker-compose.yml
+Dockerfile
+
+# --- 测试夹具 ---
+testdata/
+**/*_test.go
+
+# --- 编辑器 / 操作系统垃圾 ---
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

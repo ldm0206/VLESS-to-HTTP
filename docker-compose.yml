@@ -1,11 +1,41 @@
+# ---------------------------------------------------------------------------
+# v2h —— 多账号 HTTP / SOCKS5 代理（Xray 内核已内嵌，无需额外配置内核）
+#
+# 端口映射（左边是宿主机端口，右边是容器内端口）：
+#   9000:8080   HTTP 代理（宿主 9000 是历史端口，沿用至今）
+#   1080:1080   SOCKS5 代理
+#   9080:9080   控制面板
+#
+# 注意：这里改的只是「宿主机 -> 容器」的映射。容器内真正监听的地址在
+# data/config.yaml 里（panel.listen / proxy.http.listen / proxy.socks.listen，
+# 首次启动自动生成）。如果改了 config.yaml 里的监听端口，要同步改这里的映射，
+# 否则宿主机连不上。
+#
+# 启动前先准备数据目录（容器内以 uid 1000 运行）：
+#   mkdir -p data && sudo chown -R 1000:1000 data
+# ---------------------------------------------------------------------------
 services:
-  vless-proxy:
-    container_name: vless-to-http
-    build: .
+  v2h:
+    image: ghcr.io/ldm0206/vless-to-http:latest
+
+    # 想在本机从源码构建时，注释掉上面的 image，取消下面两行注释：
+    # build:
+    #   context: .
+
+    container_name: v2h
+    restart: unless-stopped
+
     ports:
-      - "9000:8080"   # HTTP proxy
-      - "1080:1080"   # SOCKS5 proxy
+      - "9000:8080" # HTTP 代理
+      - "1080:1080" # SOCKS5 代理
+      - "9080:9080" # 控制面板
+
+    environment:
+      # 首次启动时用它设置面板管理员密码（只在 config.yaml 还不存在时生效）。
+      # 不设置的话会随机生成一个，并只在容器日志里打印一次。
+      # V2H_ADMIN_PASSWORD: "change-me-please"
+      TZ: Asia/Shanghai
 
     volumes:
-      - ./vless.conf:/app/vless.conf:ro
-    restart: unless-stopped
+      # config.yaml（含明文代理密码）、订阅缓存、流量统计和日志都放在这里。
+      - ./data:/data
