@@ -118,6 +118,10 @@ jobs:
           labels: |
             org.opencontainers.image.title=v2h
             org.opencontainers.image.description=多账号 HTTP / SOCKS5 代理，订阅驱动，Xray 内核内嵌
+          # 不覆盖的话，包页面上显示的是仓库描述里的旧文案（还是旧的单链接代理）。
+          annotations: |
+            org.opencontainers.image.title=v2h
+            org.opencontainers.image.description=多账号 HTTP / SOCKS5 代理：订阅驱动，按账号分流，Xray 内核内嵌，自带 Web 面板
 
       - name: Build and push
         uses: docker/build-push-action@v6
