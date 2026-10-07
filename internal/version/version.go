@@ -3,6 +3,7 @@ package version
 
 import (
 	"runtime"
+	"strings"
 
 	"github.com/xtls/xray-core/core"
 )
@@ -17,9 +18,13 @@ var (
 // Xray is the embedded core version.
 func Xray() string { return core.Version() }
 
-// Full renders "v1.2.3 (abc1234)".
+// Full renders the build identifier. CI publishes every commit with the short
+// hash as the version, so "abc1234 (abc1234def…)" would just repeat itself.
 func Full() string {
 	if Commit == "none" || Commit == "" {
+		return Version
+	}
+	if Version != "" && strings.HasPrefix(Commit, Version) {
 		return Version
 	}
 	return Version + " (" + Commit + ")"

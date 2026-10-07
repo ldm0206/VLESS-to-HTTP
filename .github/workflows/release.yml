@@ -1,23 +1,66 @@
-name: Release
+name: Publish
 
+# 每次推送到 main 就发一版：跑完测试后构建多架构镜像推到 ghcr.io，
+# 并把裸二进制作为 Actions 产物留下。
+# 不依赖 tag，也不创建 GitHub Release（Release 必须挂在 tag 上）。
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  # 需要手工重发某次提交时用：Actions → Publish → Run workflow。
+  workflow_dispatch:
 
 permissions:
-  contents: write # GitHub Release
-  packages: write # ghcr.io
+  contents: read # 不建 Release，只需要读代码
+  packages: write # 推 ghcr.io
 
 env:
   IMAGE: ghcr.io/ldm0206/vless-to-http
 
+# 不用 cancel-in-progress：每次提交都要有自己的镜像，
+# 半路取消会留下没推完的多架构 manifest。
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # --------------------------------------------------------------------------
-  # 多架构镜像 → ghcr.io/ldm0206/vless-to-http
+  # 先验证，测试不过就不发版
+  # --------------------------------------------------------------------------
+  verify:
+    name: vet / test / build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race
+        run: go test ./... -race
+
+      - name: go build
+        run: go build ./...
+
+  # --------------------------------------------------------------------------
+  # 多架构镜像 → ghcr.io/ldm0206/vless-to-http:latest
+  # 每次提交都会覆盖 latest，并留下一个不可变的 sha-<短提交号> 标签。
   # --------------------------------------------------------------------------
   docker:
     name: Docker image
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -36,9 +79,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute build date
-        id: date
-        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - name: Compute version info
+        id: version
+        run: |
+          set -euo pipefail
+          echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Docker metadata
         id: meta
@@ -47,8 +93,11 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest
-            type=semver,pattern={{version}}
+            type=raw,value=main
             type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=v2h
+            org.opencontainers.image.description=多账号 HTTP / SOCKS5 代理，订阅驱动，Xray 内核内嵌
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -62,15 +111,16 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ steps.version.outputs.short }}
             COMMIT=${{ github.sha }}
-            DATE=${{ steps.date.outputs.value }}
+            DATE=${{ steps.version.outputs.date }}
 
   # --------------------------------------------------------------------------
-  # 裸二进制（linux / darwin / windows）→ GitHub Release
+  # 裸二进制：不建 Release，作为本次运行的产物上传（默认保留 90 天）
   # --------------------------------------------------------------------------
   binaries:
     name: ${{ matrix.goos }}/${{ matrix.goarch }}${{ matrix.goarm }}
+    needs: verify
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -99,8 +149,6 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
           CGO_ENABLED: "0"
-          VERSION: ${{ github.ref_name }}
-          COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
           suffix=""
@@ -111,13 +159,16 @@ jobs:
           if [ "${GOOS}" = "windows" ]; then
             ext=".exe"
           fi
-          name="v2h_${VERSION}_${GOOS}_${GOARCH}${suffix}"
+
+          short="$(git rev-parse --short=7 HEAD)"
           built="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          name="v2h_${short}_${GOOS}_${GOARCH}${suffix}"
+
           mkdir -p dist
           go build -trimpath -buildvcs=false \
             -ldflags "-s -w \
-              -X github.com/ldm0206/vless-to-http/internal/version.Version=${VERSION} \
-              -X github.com/ldm0206/vless-to-http/internal/version.Commit=${COMMIT} \
+              -X github.com/ldm0206/vless-to-http/internal/version.Version=${short} \
+              -X github.com/ldm0206/vless-to-http/internal/version.Commit=${GITHUB_SHA} \
               -X github.com/ldm0206/vless-to-http/internal/version.Date=${built}" \
             -o "dist/${name}${ext}" ./cmd/v2h
           echo "已生成 dist/${name}${ext}"
@@ -128,9 +179,10 @@ jobs:
           name: v2h-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goarm }}
           path: dist/*
           if-no-files-found: error
+          retention-days: 90
 
-  release:
-    name: Publish GitHub Release
+  collect:
+    name: Collect binaries
     needs: binaries
     runs-on: ubuntu-latest
     steps:
@@ -147,9 +199,10 @@ jobs:
           sha256sum ./* > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
+      - name: Upload the bundle
+        uses: actions/upload-artifact@v4
         with:
-          files: dist/*
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+          name: v2h-binaries
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 90

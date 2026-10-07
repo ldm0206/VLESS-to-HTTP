@@ -427,10 +427,17 @@ go build -trimpath -ldflags "-s -w \
 
 **CI / 发版**（都在 `.github/workflows/`）：
 
-- `ci.yml`：每次 push 和 PR 跑 `go vet ./...`、`go test ./... -race`、`go build ./...`，Go 版本读 `go.mod`，带模块缓存。
-- `release.yml`：推 `v*` 标签时——
-  - 构建并推送多架构镜像到 **`ghcr.io/ldm0206/vless-to-http`**，标签为 `latest`、版本号（如 tag `v1.2.3` 对应 `1.2.3`）、`sha-<短提交号>`；架构 `linux/amd64`、`linux/arm64`、`linux/arm/v7`；
-  - 交叉编译 linux（amd64/arm64/armv7）、darwin（amd64/arm64）、windows（amd64/arm64）的裸二进制，连同 `SHA256SUMS` 一起挂到 GitHub Release 上。
+- `ci.yml`：PR 和非 main 分支的 push 跑 `go vet ./...`、`go test ./... -race`、`go build ./...`，Go 版本读 `go.mod`，带模块缓存。
+- `release.yml`：**每次 push 到 main 就发一版**，不需要打 tag——
+  - 先跑一遍 vet / test -race / build，测试不过就不发；
+  - 构建并推送多架构镜像到 **`ghcr.io/ldm0206/vless-to-http`**，架构 `linux/amd64`、`linux/arm64`、`linux/arm/v7`，标签：
+    - `latest` / `main`：始终指向 main 上最新一次提交，`docker compose pull` 拉到的就是它；
+    - `sha-<短提交号>`：某次提交的固定镜像，想回滚就 `docker compose` 里把 image 改成 `:sha-1a2b3c4`；
+  - 交叉编译 linux（amd64/arm64/armv7）、darwin（amd64/arm64）、windows（amd64/arm64）的裸二进制，连同 `SHA256SUMS` 一起作为这次运行的下拉产物提供（保留 90 天）。
+
+> 版本号就是提交的短哈希（例如 `v2h 1a2b3c4`），面板底部和 `v2h version` 里都能看到，用它去对应 `sha-` 镜像标签。
+>
+> 需要重发某次提交时，用 Actions → Publish → Run workflow 手动触发。
 
 需要一个 VLESS + Reality 服务端做对照测试的话，可以用 [simple-xray-core](https://github.com/thejohnd0e/simple-xray-core)。
 

@@ -1,8 +1,10 @@
 name: CI
 
+# main 上的验证由 Publish 工作流负责（它会先跑测试再发版），
+# 这里只管 PR 和其他分支，避免同一次提交跑两遍。
 on:
   push:
-    branches: ["**"]
+    branches-ignore: [main]
   pull_request:
 
 permissions:
