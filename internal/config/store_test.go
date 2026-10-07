@@ -249,9 +249,13 @@ func TestExternalEditIsPickedUp(t *testing.T) {
 	if err := os.WriteFile(store.Path(), []byte(edited), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// Make sure the modification time differs from the recorded one.
-	past := time.Now().Add(-2 * time.Second)
-	if err := os.Chtimes(store.Path(), past, time.Now()); err != nil {
+	// Give the file an mtime that cannot collide with the one the store
+	// recorded for its own last write. On Windows the system clock that
+	// time.Now() reads and the one that stamps file writes advance in the
+	// same coarse steps (~0.5ms), so a rewrite immediately after that write
+	// can carry a bit-identical mtime and look unchanged.
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(store.Path(), past, past); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
 
