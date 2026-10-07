@@ -179,11 +179,13 @@ func TestEngineProxiesThroughNodeAndFailsOver(t *testing.T) {
 		t.Fatalf("tunnelled request failed: %d %q", code, body)
 	}
 
-	// Traffic accounting reads the core's counters.
+	// Traffic accounting reads the core's counters. This goes through a real
+	// VLESS outbound, which is the path production traffic takes, and there
+	// the core counts both directions while the connection is still open.
 	eng.pollOnce()
 	traffic := eng.Traffic()["usr_1"]
-	if traffic.Down == 0 {
-		t.Fatalf("downlink traffic was not counted: %+v", traffic)
+	if traffic.Up == 0 || traffic.Down == 0 {
+		t.Fatalf("traffic was not counted in both directions: %+v", traffic)
 	}
 
 	// The server goes away: one probe is enough with Failures=1.

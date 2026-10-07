@@ -10,9 +10,9 @@ import (
 
 // Tag names used across the generated routes.
 const (
-	DirectTag = "direct"
-	BlockTag  = "block"
-	HTTPInTag = "http-in"
+	DirectTag  = "direct"
+	BlockTag   = "block"
+	HTTPInTag  = "http-in"
 	SocksInTag = "socks-in"
 	ProbeInTag = "probe-in"
 )
@@ -49,13 +49,13 @@ type Observatory struct {
 
 // Plan is everything the config builder needs; the engine fills it in.
 type Plan struct {
-	HTTP         ListenSpec
-	SOCKS        ListenSpec
-	SocksUDP     bool
-	Sniffing     bool
-	Timeout      int
-	DNSServers   []string
-	CustomRules  []map[string]any
+	HTTP        ListenSpec
+	SOCKS       ListenSpec
+	SocksUDP    bool
+	Sniffing    bool
+	Timeout     int
+	DNSServers  []string
+	CustomRules []map[string]any
 
 	ProbeListen string
 	ProbePass   string
@@ -80,12 +80,12 @@ func BuildJSON(p Plan) ([]byte, error) {
 	cfg := map[string]any{
 		// The core's own writers stay off; every message is captured by the
 		// in-process handler registered right after start.
-		"log":     map[string]any{"loglevel": "warning", "access": "none", "error": "none"},
-		"stats":   map[string]any{},
-		"policy":  policySection(p.Timeout),
-		"inbounds": p.inbounds(),
+		"log":       map[string]any{"loglevel": "warning", "access": "none", "error": "none"},
+		"stats":     map[string]any{},
+		"policy":    policySection(p.Timeout),
+		"inbounds":  p.inbounds(),
 		"outbounds": p.outbounds(),
-		"routing": p.routing(),
+		"routing":   p.routing(),
 	}
 	if len(p.DNSServers) > 0 {
 		servers := make([]any, 0, len(p.DNSServers))
@@ -153,8 +153,8 @@ func (p Plan) inbounds() []any {
 			"port":     portOf(p.HTTP.Listen),
 			"protocol": "http",
 			"settings": map[string]any{
-				"accounts": accounts,
-				"timeout":  p.Timeout,
+				"accounts":  accounts,
+				"timeout":   p.Timeout,
 				"userLevel": 0,
 			},
 		}

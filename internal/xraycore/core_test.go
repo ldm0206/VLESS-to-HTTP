@@ -214,9 +214,22 @@ func TestLogCaptureAndStats(t *testing.T) {
 		t.Fatalf("request through proxy: %v", err)
 	}
 
-	stats := inst.UserTraffic([]string{"bob", "ghost"})
-	if stats["bob"].Down == 0 {
-		t.Fatalf("expected downlink bytes for bob, got %+v", stats)
+	// On Linux the core splices direct connections and credits the byte
+	// counters when the tunnel ends, so an idle connection still reads as
+	// zero. Close it before looking at the numbers.
+	client.CloseIdleConnections()
+
+	var stats map[string]xraycore.Traffic
+	waitUntil := time.Now().Add(3 * time.Second)
+	for time.Now().Before(waitUntil) {
+		stats = inst.UserTraffic([]string{"bob", "ghost"})
+		if stats["bob"].Up > 0 && stats["bob"].Down > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if stats["bob"].Up == 0 || stats["bob"].Down == 0 {
+		t.Fatalf("expected traffic in both directions for bob, got %+v", stats["bob"])
 	}
 	if stats["ghost"].Up != 0 || stats["ghost"].Down != 0 {
 		t.Fatalf("ghost user should have no counters, got %+v", stats["ghost"])
@@ -365,9 +378,9 @@ func TestSocksInbound(t *testing.T) {
 	srv := origin(t)
 	socksPort := freePort(t)
 	start(t, xraycore.Plan{
-		SOCKS:    xraycore.ListenSpec{Enabled: true, Listen: localAddr(socksPort)},
-		Timeout:  300,
-		Users:    []xraycore.PlanUser{{Name: "carol", Password: "pw", OutboundTag: xraycore.DirectTag}},
+		SOCKS:   xraycore.ListenSpec{Enabled: true, Listen: localAddr(socksPort)},
+		Timeout: 300,
+		Users:   []xraycore.PlanUser{{Name: "carol", Password: "pw", OutboundTag: xraycore.DirectTag}},
 	}, nil)
 
 	dialer, err := proxy.SOCKS5("tcp", localAddr(socksPort),
