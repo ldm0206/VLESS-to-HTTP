@@ -38,7 +38,6 @@ type Server struct {
 	logger *logs.Logger
 	mux    *http.ServeMux
 
-	trusted []*net.IPNet
 	login   *rateLimiter
 	started time.Time
 }
@@ -49,7 +48,6 @@ func New(eng *engine.Engine, logger *logs.Logger) (*Server, error) {
 		eng:     eng,
 		logger:  logger,
 		mux:     http.NewServeMux(),
-		trusted: parseCIDRs(eng.Store().Get().Panel.TrustedProxies),
 		login:   newRateLimiter(10, 15*time.Minute),
 		started: time.Now(),
 	}
@@ -320,23 +318,44 @@ func (s *Server) tokenAllowed(r *http.Request) bool {
 	return false
 }
 
+// trustedProxies is read per request, like token_ips: tightening the list must
+// take effect without restarting the panel.
+func (s *Server) trustedProxies() []*net.IPNet {
+	return parseCIDRs(s.eng.Store().Get().Panel.TrustedProxies)
+}
+
+// clientIP reports who to attribute a request to. Forwarding headers are only
+// read when the request arrives from a trusted proxy, and then only the
+// right-most address that is not itself trusted: everything to its left is
+// whatever the client sent, and an ordinary reverse proxy passes headers like
+// CF-Connecting-IP through verbatim.
 func (s *Server) clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
 	ip := net.ParseIP(host)
-	if ip == nil || !ipInAny(ip, s.trusted) {
+	trusted := s.trustedProxies()
+	if ip == nil || !ipInAny(ip, trusted) {
 		return host
 	}
-	if forwarded := r.Header.Get("CF-Connecting-IP"); forwarded != "" {
-		return strings.TrimSpace(forwarded)
-	}
 	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		first := strings.TrimSpace(strings.Split(forwarded, ",")[0])
-		if net.ParseIP(first) != nil {
-			return first
+		parts := strings.Split(forwarded, ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			candidate := strings.TrimSpace(parts[i])
+			parsed := net.ParseIP(candidate)
+			if parsed == nil {
+				break
+			}
+			if !ipInAny(parsed, trusted) {
+				return candidate
+			}
 		}
+	}
+	// Cloudflare sets CF-Connecting-IP itself, so it is a fallback for proxies
+	// that do not fill in a forwarded chain at all.
+	if forwarded := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); net.ParseIP(forwarded) != nil {
+		return forwarded
 	}
 	return host
 }
@@ -350,7 +369,7 @@ func (s *Server) isHTTPS(r *http.Request) bool {
 		host = r.RemoteAddr
 	}
 	ip := net.ParseIP(host)
-	if ip != nil && ipInAny(ip, s.trusted) {
+	if ip != nil && ipInAny(ip, s.trustedProxies()) {
 		return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 	}
 	return false

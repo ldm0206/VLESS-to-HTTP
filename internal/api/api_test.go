@@ -21,6 +21,7 @@ const adminPassword = "secret-password"
 
 type testServer struct {
 	*httptest.Server
+	srv    *Server
 	store  *config.Store
 	engine *engine.Engine
 	client *http.Client
@@ -61,7 +62,7 @@ func newTestServer(t *testing.T) *testServer {
 		t.Fatalf("api: %v", err)
 	}
 
-	ts := &testServer{Server: httptest.NewServer(srv.Handler()), store: store, engine: eng}
+	ts := &testServer{Server: httptest.NewServer(srv.Handler()), srv: srv, store: store, engine: eng}
 	ts.client = &http.Client{
 		Jar:       nil,
 		Transport: ts.Server.Client().Transport,
@@ -205,6 +206,51 @@ func TestLoginIsRateLimited(t *testing.T) {
 	}
 	if last != http.StatusTooManyRequests {
 		t.Fatalf("brute force was not limited, last status %d", last)
+	}
+}
+
+// The login throttle keys on the client address, so a request must not be able
+// to pick that key itself: only the right-most hop of a forwarded chain counts,
+// and a client-supplied CF-Connecting-IP never overrides it.
+func TestClientIPIgnoresSpoofedForwardedHeaders(t *testing.T) {
+	ts := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/login", nil)
+	req.RemoteAddr = "127.0.0.1:44321" // the trusted proxy the tests arrive through
+
+	// A proxy that appends the address it saw leaves the client's own value on
+	// the left, where it must be ignored.
+	req.Header.Set("X-Forwarded-For", "203.0.113.9, 127.0.0.1")
+	if got := ts.srv.clientIP(req); got != "203.0.113.9" {
+		t.Fatalf("clientIP = %q, want the right-most untrusted hop", got)
+	}
+
+	// Rotating a forwarded header must not mint a fresh key.
+	for _, spoof := range []string{"198.51.100.1", "198.51.100.2", "198.51.100.3"} {
+		req.Header.Set("CF-Connecting-IP", spoof)
+		if got := ts.srv.clientIP(req); got != "203.0.113.9" {
+			t.Fatalf("CF-Connecting-IP %s overrode the chain: %q", spoof, got)
+		}
+	}
+
+	// A value that is not an address is never used.
+	req.Header.Del("X-Forwarded-For")
+	req.Header.Set("CF-Connecting-IP", "not-an-ip")
+	if got := ts.srv.clientIP(req); got != "127.0.0.1" {
+		t.Fatalf("clientIP = %q, want the peer address", got)
+	}
+
+	// Untrusted peers get no say at all, and tightening the list applies at once.
+	if err := ts.store.Update(func(c *config.Config) error {
+		c.Panel.TrustedProxies = []string{"10.99.0.0/16"}
+		return nil
+	}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	req.Header.Set("X-Forwarded-For", "203.0.113.9")
+	req.Header.Set("CF-Connecting-IP", "198.51.100.1")
+	if got := ts.srv.clientIP(req); got != "127.0.0.1" {
+		t.Fatalf("clientIP = %q, want the peer address while it is untrusted", got)
 	}
 }
 

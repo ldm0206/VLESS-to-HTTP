@@ -280,7 +280,7 @@ v2h core config                          # 看内核实际拿到的配置（排�
 2. **打开 Turnstile**：面板「设置 → Cloudflare Turnstile」，填 Site Key 和 Secret Key 并启用。`fail_open` 保持关闭（默认），这样 Cloudflare 不可用时会拒绝登录而不是放行。
    > Turnstile 需要容器能访问 `challenges.cloudflare.com`，镜像里已经带了 CA 证书。
 3. **收紧 `panel.token_ips`**：它决定哪些来源可以用 API Token 免登录调用接口（默认只有 `127.0.0.1/8` 和 `::1/128`）。**不要**改成 `0.0.0.0/0`，那等于把控制权完全开放。想从本机用 CLI 连远程实例，就把你那台机器的出口 IP（段）加进去。
-4. **设置 `panel.trusted_proxies`**：只有来自这些网段的请求，`X-Forwarded-For` / `X-Real-IP` 才会被采信。用反代时填代理所在的网段，否则日志里的客户端 IP 会不对。
+4. **设置 `panel.trusted_proxies`**：只有来自这些网段的请求，转发头才会被采信，而且只取 `X-Forwarded-For` 里**最右边一个不在受信网段内的地址**——左边那些是客户端自己填的。所以反代必须**追加**客户端地址（Nginx 默认的 `$proxy_add_x_forwarded_for`、Caddy 默认行为都是追加），若反代只是原样透传客户端带来的 `X-Forwarded-For`，取到的就还是伪造值。网段填代理所在的网段，否则日志里的客户端 IP 会不对。改完立即生效，不用重启。
 5. **保护好 `config.yaml`**：里面存着所有代理账号的**明文密码**（Xray 认证需要原文）和 API Token，落盘权限是 `0600`。别提交到 git，别共享数据目录。
 6. **主机的防火墙**：只放行你真正需要的端口。面板 9080 建议只对反代/隧道开放，HTTP 代理 9000 和 SOCKS5 1080 才是给客户端用的。
 

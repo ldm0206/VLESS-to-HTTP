@@ -2,10 +2,12 @@ package subscription
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -29,6 +31,32 @@ var client = &http.Client{
 	},
 }
 
+// redactURL keeps a subscription link readable in an error without exposing the
+// credential it carries: providers put the access token in the query string,
+// and Go's own url.Error strips only the password inside the userinfo.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<链接无法解析>"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.RawFragment = ""
+	return u.String()
+}
+
+// stripURL unwraps the *url.Error a client failure carries, so an error that
+// reaches the log or the persisted last_error no longer quotes the full URL.
+// The cause is kept, which keeps errors.Is working for callers.
+func stripURL(err error) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) && uerr.Err != nil {
+		return uerr.Err
+	}
+	return err
+}
+
 // Fetch downloads a subscription URL and returns the raw body.
 func Fetch(ctx context.Context, url, userAgent string) ([]byte, error) {
 	if userAgent == "" {
@@ -37,14 +65,14 @@ func Fetch(ctx context.Context, url, userAgent string) ([]byte, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("构造请求失败：%w", err)
+		return nil, fmt.Errorf("构造请求失败：%s：%w", redactURL(url), stripURL(err))
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "*/*")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("请求失败：%w", err)
+		return nil, fmt.Errorf("请求失败：%s：%w", redactURL(url), stripURL(err))
 	}
 	defer resp.Body.Close()
 
