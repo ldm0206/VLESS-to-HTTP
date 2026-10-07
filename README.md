@@ -430,7 +430,7 @@ go build -trimpath -ldflags "-s -w \
 - `ci.yml`：PR 和非 main 分支的 push 跑 `go vet ./...`、`go test ./... -race`、`go build ./...`，Go 版本读 `go.mod`，带模块缓存。
 - `release.yml`：**每次 push 到 main 就发一版**，不需要打 tag——
   - 先跑一遍 vet / test -race / build，测试不过就不发；
-  - 构建并推送多架构镜像到 **`ghcr.io/ldm0206/vless-to-http`**，架构 `linux/amd64`、`linux/arm64`、`linux/arm/v7`，标签：
+  - 构建并推送多架构镜像到 **`ghcr.io/ldm0206/vless-to-http`**，架构 `linux/amd64`、`linux/arm64`、`linux/arm/v7`。镜像里的二进制是在 runner 上用 Go 原生交叉编译好的，镜像构建阶段只做打包，不碰 QEMU 模拟编译（在 arm/v7 上那会慢到几十分钟）。标签：
     - `latest` / `main`：始终指向 main 上最新一次提交，`docker compose pull` 拉到的就是它；
     - `sha-<短提交号>`：某次提交的固定镜像，想回滚就 `docker compose` 里把 image 改成 `:sha-1a2b3c4`；
   - 交叉编译 linux（amd64/arm64/armv7）、darwin（amd64/arm64）、windows（amd64/arm64）的裸二进制，连同 `SHA256SUMS` 一起作为这次运行的下拉产物提供（保留 90 天）。

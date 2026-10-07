@@ -1,0 +1,15 @@
+# 这个项目在 Windows 上开发、在 Linux 上构建，行尾必须统一：
+# CRLF 会让 Dockerfile 的续行符（\）失效、也会让 CI 里的 shell 步骤出错。
+* text=auto
+.gitattributes text eol=lf
+Dockerfile text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.go text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf

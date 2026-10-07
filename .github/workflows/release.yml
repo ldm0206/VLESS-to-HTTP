@@ -60,11 +60,31 @@ jobs:
   # --------------------------------------------------------------------------
   docker:
     name: Docker image
-    needs: verify
+    # 等二进制先出来：镜像只负责把预编译产物装进去，不再在 QEMU 里编译。
+    needs: binaries
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Download the linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          # 只要三个 linux 产物；v2h-binaries 那个合并包不需要。
+          pattern: v2h-linux-*
+          path: prebuilt
+          merge-multiple: true
+
+      - name: Stage them under the names the Dockerfile expects
+        run: |
+          set -euo pipefail
+          short="$(git rev-parse --short=7 HEAD)"
+          for f in prebuilt/v2h_${short}_linux_*; do
+            arch="${f##*_linux_}"        # amd64 | arm64 | armv7
+            cp "$f" "prebuilt/v2h-linux-${arch}"
+            echo "prebuilt/v2h-linux-${arch} ← $(basename "$f")"
+          done
+          ls -la prebuilt/
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -108,9 +128,15 @@ jobs:
           # 一些老的 docker 客户端 / 面板会看不懂，也省一半推送量。
           provenance: false
           push: true
+          # 层缓存：apk add 那层在每次提交之间可以复用。
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            # alpine 基础镜像里没有 Go 工具链，强制走 prebuilt/ 那条分支，
+            # 避免在 QEMU 下编译整个 Xray 依赖树（arm/v7 要几十分钟）。
+            BUILD_BASE=alpine:3.20
             VERSION=${{ steps.version.outputs.short }}
             COMMIT=${{ github.sha }}
             DATE=${{ steps.version.outputs.date }}

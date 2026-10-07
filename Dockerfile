@@ -3,35 +3,52 @@
 # ---------------------------------------------------------------------------
 # v2h 是一个单文件 Go 程序，Xray 内核以库的形式编译在里面，
 # 所以运行镜像里既没有 Xray 可执行文件，也没有内核配置文件。
+#
+# 构建分两种情况：
+#   * CI（每次提交发版）：先在 runner 上用 Go 原生交叉编译出各架构二进制，
+#     放进 prebuilt/ 再构建镜像。镜像里不再编译，也就完全不需要 QEMU
+#     模拟编译——那一步在 arm/v7 上要几十分钟。
+#   * 本机 `docker build .`：没有 prebuilt/，就在构建阶段直接编译（只支持
+#     当前架构），代价是每次都重新下载依赖。
 # ---------------------------------------------------------------------------
 
-# ---- 构建阶段 -------------------------------------------------------------
-FROM golang:1.26-alpine AS build
+# CI 传 BUILD_BASE=alpine:3.20 来彻底跳过 Go 工具链；本机构建用默认值。
+ARG BUILD_BASE=golang:1.26-alpine
 
-# 版本信息由 CI 用 tag / commit 注入，手工构建时保持默认值。
+# ---- 构建阶段 -------------------------------------------------------------
+FROM ${BUILD_BASE} AS build
+
+# buildx 会自动注入这两个参数（linux/arm/v7 → arm + v7）。
+ARG TARGETARCH
+ARG TARGETVARIANT
+
+# 版本信息由 CI 用提交号注入，手工构建时保持默认值。
 ARG VERSION=dev
 ARG COMMIT=none
 ARG DATE=unknown
 
 WORKDIR /src
-
-# 依赖清单单独一层：只改源码时 go mod download 的缓存不会被冲掉。
-COPY go.mod go.sum ./
-RUN go mod download
-
-# 其余源码（.dockerignore 已经把 .git、data/、文档等排除在外）。
 COPY . .
 
-# CGO_ENABLED=0 让产物完全静态，可直接跑在 scratch/alpine 上；
-# -trimpath 去掉本地路径，-s -w 去掉符号表和调试信息；
-# -buildvcs=false：镜像里没有 .git，显式关掉 VCS stamping，避免构建机装没装 git 影响结果。
-ENV CGO_ENABLED=0
-RUN go build -trimpath -buildvcs=false \
-        -ldflags "-s -w \
-            -X github.com/ldm0206/vless-to-http/internal/version.Version=${VERSION} \
-            -X github.com/ldm0206/vless-to-http/internal/version.Commit=${COMMIT} \
-            -X github.com/ldm0206/vless-to-http/internal/version.Date=${DATE}" \
-        -o /out/v2h ./cmd/v2h
+# prebuilt/ 里有对应架构的二进制就直接装进去，否则在本机编译（见文件头的说明）。
+# 最后执行一次 `version` 自检：原生架构下是真跑，交叉架构下由 QEMU 运行，
+# 模拟不了时只打印一行提示，不让构建失败。
+RUN set -eux; \
+    mkdir -p /out; \
+    prebuilt="/src/prebuilt/v2h-linux-${TARGETARCH}${TARGETVARIANT}"; \
+    if [ -f "$prebuilt" ]; then \
+        echo "使用预编译二进制：$prebuilt"; \
+        install -m755 "$prebuilt" /out/v2h; \
+    else \
+        echo "prebuilt/ 里没有对应二进制，改为在镜像内编译（仅限当前架构）"; \
+        CGO_ENABLED=0 go build -trimpath -buildvcs=false \
+            -ldflags "-s -w \
+                -X github.com/ldm0206/vless-to-http/internal/version.Version=${VERSION} \
+                -X github.com/ldm0206/vless-to-http/internal/version.Commit=${COMMIT} \
+                -X github.com/ldm0206/vless-to-http/internal/version.Date=${DATE}" \
+            -o /out/v2h ./cmd/v2h; \
+    fi; \
+    /out/v2h version || echo "(skip version self-check: cannot run this arch here)"
 
 # ---- 运行阶段 -------------------------------------------------------------
 FROM alpine:3.20
