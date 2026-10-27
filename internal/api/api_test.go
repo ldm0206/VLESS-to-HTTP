@@ -431,7 +431,8 @@ func TestSubscriptionImportAndNodeListing(t *testing.T) {
 		"hysteria2://pw@hy.example.com:443#韩国HY2\n"
 
 	resp := ts.do(t, http.MethodPost, "/api/subs/import", cookie, map[string]any{
-		"name": "本地导入", "kind": "v2ray", "content": content, "skip_health": true,
+		"name": "本地导入", "kind": "v2ray", "content": content,
+		"skip_health": true, "skip_sniffing": true,
 	}, headers...)
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -451,17 +452,20 @@ func TestSubscriptionImportAndNodeListing(t *testing.T) {
 	if !imported.Sub.SkipHealth {
 		t.Fatal("imported subscription should keep skip_health")
 	}
+	if !imported.Sub.SkipSniffing {
+		t.Fatal("imported subscription should keep skip_sniffing")
+	}
 
 	toggle := ts.do(t, http.MethodPatch, "/api/subs/"+imported.Sub.ID, cookie,
-		map[string]any{"skip_health": false}, headers...)
+		map[string]any{"skip_health": false, "skip_sniffing": false}, headers...)
 	if toggle.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(toggle.Body)
 		toggle.Body.Close()
-		t.Fatalf("skip_health update = %d %s", toggle.StatusCode, body)
+		t.Fatalf("subscription switches update = %d %s", toggle.StatusCode, body)
 	}
 	toggle.Body.Close()
-	if sub := ts.store.Get().FindSub(imported.Sub.ID); sub == nil || sub.SkipHealth {
-		t.Fatalf("skip_health was not cleared: %+v", sub)
+	if sub := ts.store.Get().FindSub(imported.Sub.ID); sub == nil || sub.SkipHealth || sub.SkipSniffing {
+		t.Fatalf("subscription switches were not cleared: %+v", sub)
 	}
 
 	nodes := ts.do(t, http.MethodGet, "/api/nodes", cookie, nil)

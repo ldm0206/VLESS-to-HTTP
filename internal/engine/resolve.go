@@ -23,7 +23,10 @@ type UserRoute struct {
 	ActiveNode string // node id in use for priority/fixed
 	Outbound   string // outbound tag, when not using a balancer
 	Balancer   string // balancer tag for auto mode
-	Reason     string // why the route looks the way it does
+	// SkipSniffing is true when every usable target comes from a subscription
+	// that opted out of sniffing, so its traffic bypasses domain rules.
+	SkipSniffing bool
+	Reason       string // why the route looks the way it does
 }
 
 // resolution is the compiled view of the config at one point in time.
@@ -55,11 +58,14 @@ func resolve(cfg *config.Config, subs map[string][]node.Node, healthy func(strin
 
 	index := newSubIndex(cfg, subs)
 	skipHealth := make(map[string]bool, len(cfg.Subscriptions))
+	skipSniffing := make(map[string]bool, len(cfg.Subscriptions))
 	for i := range cfg.Subscriptions {
 		skipHealth[cfg.Subscriptions[i].ID] = cfg.Subscriptions[i].SkipHealth
+		skipSniffing[cfg.Subscriptions[i].ID] = cfg.Subscriptions[i].SkipSniffing
 	}
 	used := map[string]bool{}
 	var usedNodes []node.Node
+	sniffNeeded := false
 
 	plan := xraycore.Plan{
 		HTTP:        xraycore.ListenSpec{Enabled: cfg.Proxy.HTTP.Enabled, Listen: cfg.Proxy.HTTP.Listen},
@@ -110,6 +116,7 @@ func resolve(cfg *config.Config, subs map[string][]node.Node, healthy func(strin
 		}
 
 		if u.Enabled {
+			sniffing := false
 			for _, n := range usable {
 				route.NodeIDs = append(route.NodeIDs, n.ID)
 				if !used[n.ID] {
@@ -121,6 +128,15 @@ func resolve(cfg *config.Config, subs map[string][]node.Node, healthy func(strin
 				if u.Mode != config.ModeAuto && !skipHealth[n.SubID] {
 					scheduledProbes[n.ID] = n
 				}
+				if !skipSniffing[n.SubID] {
+					sniffing = true
+				}
+			}
+			// Sniffing itself is inbound-wide in Xray; this flag is what lets
+			// the router skip domain rules for an account that opted out.
+			route.SkipSniffing = cfg.Proxy.Sniffing && len(usable) > 0 && !sniffing
+			if sniffing {
+				sniffNeeded = true
 			}
 		}
 
@@ -186,12 +202,17 @@ func resolve(cfg *config.Config, subs map[string][]node.Node, healthy func(strin
 		}
 
 		plan.Users = append(plan.Users, xraycore.PlanUser{
-			Name:        u.Name,
-			Password:    u.Password,
-			OutboundTag: route.Outbound,
-			BalancerTag: route.Balancer,
+			Name:         u.Name,
+			Password:     u.Password,
+			OutboundTag:  route.Outbound,
+			BalancerTag:  route.Balancer,
+			SkipSniffing: route.SkipSniffing,
 		})
 	}
+
+	// If no active target wants sniffing, there is nothing for the inbound to
+	// extract, so turn it off entirely.
+	plan.Sniffing = cfg.Proxy.Sniffing && sniffNeeded
 
 	// Probe accounting: every materialised node gets a probe account so the
 	// panel's test button works. Only the scheduled subset is probed in the

@@ -137,7 +137,7 @@
 
   var MODE_LABEL = { priority: '按序优先', auto: '自动切换', fixed: '固定节点' };
   var FALLBACK_LABEL = { inherit: '跟随全局', direct: '直连', reject: '拒绝连接' };
-  var KIND_LABEL = { auto: '自动识别', clash: 'Clash', v2ray: 'v2ray' };
+  var KIND_LABEL = { auto: '自动', clash: 'Clash', v2ray: 'v2ray' };
   var LEVEL_LABEL = { debug: '调试', info: '信息', warning: '警告', error: '错误' };
 
   function modeLabel(mode) { return MODE_LABEL[mode] || mode || '—'; }
@@ -216,7 +216,7 @@
     subNodes: {}, nodes: [], nodeFilter: { sub: '', proto: '', hideUnsupported: false },
     logLines: [], lastSeq: 0, logPaused: false, logStick: true,
     settings: null, help: null,
-    overviewAccount: '', theme: null,
+    overviewAccount: '', overviewTraffic: null, overviewTrafficPending: '', theme: null,
     events: null, eventsState: 'idle', eventsAttempts: 0, lastEventAt: 0, eventsTimer: null, watchdog: null
   };
 
@@ -940,11 +940,13 @@
       cards: el('div', { class: 'grid grid-4' }),
       endpoints: el('div', { class: 'card' }),
       health: el('div', { class: 'card' }),
+      traffic: el('div', { class: 'card' }),
       tail: el('div', { class: 'card' })
     };
     root.replaceChildren(
       ovRefs.cards,
       el('div', { class: 'grid grid-side' }, [ovRefs.endpoints, ovRefs.health]),
+      ovRefs.traffic,
       ovRefs.tail
     );
     paintOverview();
@@ -962,6 +964,7 @@
     paintOverviewCards();
     paintOverviewEndpoints();
     paintOverviewHealth();
+    paintOverviewTraffic();
     paintOverviewTail();
   }
 
@@ -1009,6 +1012,84 @@
     );
   }
 
+  function loadOverviewTraffic(user) {
+    if (!user) return;
+    var cache = state.overviewTraffic;
+    var fresh = cache && cache.userId === user.id && Date.now() - cache.at < 60000;
+    if (fresh || state.overviewTrafficPending === user.id) return;
+
+    var requested = user.id;
+    state.overviewTrafficPending = requested;
+    api.get('/api/users/' + encodeURIComponent(requested) + '/traffic/history?days=31')
+      .then(function (data) {
+        if (state.overviewTrafficPending === requested) state.overviewTrafficPending = '';
+        if (state.overviewAccount !== requested) return;
+        state.overviewTraffic = {
+          userId: requested,
+          buckets: (data && data.buckets) || [],
+          at: Date.now()
+        };
+        if (currentView === 'overview' && ovRefs && ovRefs.traffic.isConnected) paintOverviewTraffic();
+      }, function () {
+        if (state.overviewTrafficPending === requested) state.overviewTrafficPending = '';
+      });
+  }
+
+  function paintOverviewTraffic() {
+    if (!ovRefs || !ovRefs.traffic.isConnected) return;
+    var users = state.users || [];
+    if (users.length && (!state.overviewAccount || !userById(state.overviewAccount))) {
+      state.overviewAccount = users[0].id;
+      state.overviewTraffic = null;
+    }
+    var user = userById(state.overviewAccount);
+    var cache = state.overviewTraffic;
+    var key = state.overviewAccount + ':' + (cache ? cache.at : 0) + ':' + users.length;
+    loadOverviewTraffic(user);
+    if (ovRefs.traffic.dataset.key === key && ovRefs.traffic.childElementCount > 0) return;
+    ovRefs.traffic.dataset.key = key;
+
+    var select = el('select', {
+      onchange: function (e) {
+        state.overviewAccount = e.target.value;
+        state.overviewTraffic = null;
+        state.overviewTrafficPending = '';
+        paintOverviewEndpoints();
+        paintOverviewTraffic();
+      }
+    }, users.length ? users.map(function (u) {
+      return el('option', { value: u.id, selected: u.id === state.overviewAccount ? true : null, text: u.name });
+    }) : [el('option', { value: '', text: '（还没有账号）' })]);
+
+    var head = el('div', { class: 'card-head' }, [
+      el('span', { class: 'card-title' }, ['近 30 天流量']),
+      el('span', { class: 'card-note' }, ['按天统计上行 / 下行，数据每 30 秒保存']),
+      el('div', { class: 'card-actions' }, [
+        el('div', { style: { minWidth: '150px' } }, [select]),
+        el('button', {
+          class: 'btn btn-ghost btn-sm', type: 'button', disabled: !user,
+          onclick: function () { if (user) openUserTraffic(user); }
+        }, ['查看明细'])
+      ])
+    ]);
+
+    var body;
+    if (!user) {
+      body = emptyState('先在「账号」页创建一个代理账号。');
+    } else if (cache && cache.userId === user.id) {
+      body = trafficChart(cache.buckets, 'day', 30);
+      if (!cache.buckets.length) {
+        body.appendChild(el('div', { class: 'chart-total-note' }, [
+          '历史数据从本版本开始按小时记录；升级前的累计流量无法拆分到每天。'
+        ]));
+      }
+    } else {
+      body = emptyState('正在读取流量记录…');
+    }
+
+    ovRefs.traffic.replaceChildren(head, body);
+  }
+
   function paintOverviewEndpoints() {
     if (!ovRefs || !ovRefs.endpoints.isConnected) return;
     var proxy = state.proxy || {};
@@ -1038,7 +1119,13 @@
       state.overviewAccount = users[0].id;
     }
     var select = el('select', {
-      onchange: function (e) { state.overviewAccount = e.target.value; paintOverviewEndpoints(); }
+      onchange: function (e) {
+        state.overviewAccount = e.target.value;
+        state.overviewTraffic = null;
+        state.overviewTrafficPending = '';
+        paintOverviewEndpoints();
+        paintOverviewTraffic();
+      }
     }, users.length ? users.map(function (u) {
       return el('option', { value: u.id, selected: u.id === state.overviewAccount ? true : null, text: u.name });
     }) : [el('option', { value: '', text: '（还没有账号）' })]);
@@ -1290,7 +1377,7 @@
       ]),
       el('td', {}, [el('div', { class: 'cell-actions' }, [
         el('button', { class: 'btn btn-outline btn-sm', type: 'button', onclick: function () { openUserEditor(u); } }, ['编辑']),
-        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: function () { openUserTraffic(u); } }, ['用量']),
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '查看近 30 天流量图表', onclick: function () { openUserTraffic(u); } }, ['流量图']),
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: function () { resetTraffic(u, this); } }, ['重置流量']),
         el('button', { class: 'btn btn-danger-text btn-sm', type: 'button', onclick: function () { deleteUser(u); } }, ['删除'])
       ])])
@@ -1841,7 +1928,7 @@
   function renderSubs(root) {
     subRefs = { tbody: el('tbody') };
     var table = el('table', { class: 'data fixed' }, [
-      colgroup([18, 8, 6, 7, 16, 13, 7, 7, 18]),
+      colgroup([15, 8, 8, 6, 12, 11, 6, 6, 6, 22]),
       el('thead', {}, [el('tr', {}, [
         el('th', {}, ['名称']),
         el('th', {}, ['状态']),
@@ -1849,7 +1936,8 @@
         el('th', { class: 'num' }, ['节点数']),
         el('th', {}, ['流量']),
         el('th', {}, ['上次更新']),
-        el('th', {}, ['健康检查']),
+        el('th', { title: '后台健康检查和 auto 测速' }, ['检查']),
+        el('th', { title: '按域名分流的嗅探' }, ['嗅探']),
         el('th', {}, ['启用']),
         el('th', { class: 'num' }, ['操作'])
       ])]),
@@ -1859,7 +1947,7 @@
     root.replaceChildren(
       el('div', { class: 'page-head' }, [
         el('div', {}, [
-          el('div', { class: 'page-lead' }, ['订阅是节点的来源：填一条 Clash / v2ray 链接自动更新，或者直接粘贴内容导入。关闭某条订阅的「健康检查」后，它的节点不参与后台探测和 auto 测速，可节省机场流量；auto 模式下这些节点没有测速结果，不会被自动选路，全部目标都关闭时账号走兜底策略。'])
+          el('div', { class: 'page-lead' }, ['订阅是节点的来源：填一条 Clash / v2ray 链接自动更新，或者直接粘贴内容导入。每条订阅可以单独关闭「健康检查」（省机场流量，auto 模式下这些节点不会被自动选路）和「嗅探」（账号流量不受按域名分流的自定义规则影响）。'])
         ])
       ]),
       el('div', { class: 'toolbar' }, [
@@ -1877,7 +1965,7 @@
     if (!subRefs || !subRefs.tbody.isConnected) return;
     var subs = state.subs || [];
     if (!subs.length) {
-      subRefs.tbody.replaceChildren(emptyRow(9, '还没有订阅。点击「新建订阅」或「粘贴导入」添加第一个。'));
+      subRefs.tbody.replaceChildren(emptyRow(10, '还没有订阅。点击「新建订阅」或「粘贴导入」添加第一个。'));
       return;
     }
     subRefs.tbody.replaceChildren.apply(subRefs.tbody, subs.map(subRow));
@@ -1940,6 +2028,17 @@
       }
     });
 
+    var sniffInput = el('input', {
+      type: 'checkbox', checked: !sub.skip_sniffing,
+      title: '关闭后这条订阅的账号流量不受按域名分流的自定义规则影响',
+      onchange: function () {
+        var box = this;
+        api.patch('/api/subs/' + encodeURIComponent(sub.id), { skip_sniffing: !box.checked })
+          .then(function () { toast(box.checked ? '已恢复该订阅的嗅探' : '已跳过该订阅的嗅探', 'success'); })
+          .catch(function (err) { box.checked = !box.checked; fail(err); });
+      }
+    });
+
     var refreshBtn = el('button', {
       class: 'btn btn-outline btn-sm', type: 'button',
       onclick: function () { refreshSub(sub, this); }
@@ -1969,6 +2068,7 @@
         el('div', { class: 'cell-sub' }, [interval ? '每 ' + fmtInterval(interval) + '自动更新' : '不自动更新'])
       ]),
       el('td', {}, [healthInput]),
+      el('td', {}, [sniffInput]),
       el('td', {}, [enabledInput]),
       el('td', {}, [el('div', { class: 'cell-actions' }, [
         refreshBtn,
@@ -2016,6 +2116,7 @@
     var intervalInput = el('input', { type: 'text', value: '12h', placeholder: '12h' });
     var refreshInput = el('input', { type: 'checkbox', checked: true });
     var healthInput = el('input', { type: 'checkbox', checked: true });
+    var sniffInput = el('input', { type: 'checkbox', checked: true });
 
     var dialog = openModal({
       title: '新建订阅',
@@ -2024,25 +2125,26 @@
         field('名称', nameInput, '用于在账号里选择订阅，重名会被拒绝。'),
         field('订阅链接', urlInput),
         el('div', { class: 'form-grid' }, [
-          field('格式', kindSelect, '不确定就选「自动识别」。'),
+          field('格式', kindSelect, '不确定就选「自动」。'),
           field('更新间隔', intervalInput, '例如 12h、30m；填 0 表示不自动更新。')
         ]),
         toggleRow('创建后立即拉取', refreshInput),
-        toggleRow('启用健康检查', healthInput, '关闭后这条订阅的节点不再被后台探测，可节省机场流量；auto 模式下它们没有测速结果，不会被自动选路。')
+        toggleRow('启用健康检查', healthInput, '关闭后这条订阅的节点不再被后台探测，可节省机场流量；auto 模式下它们没有测速结果，不会被自动选路。'),
+        toggleRow('启用流量嗅探', sniffInput, '关闭后这条订阅的账号流量不受按域名分流的自定义规则影响；账号目标里只要有一个订阅开启嗅探，就按开启处理。')
       ]),
       foot: [
         el('div', { class: 'spacer' }),
         el('button', { class: 'btn btn-outline', type: 'button', onclick: function () { dialog.close(); } }, ['取消']),
         el('button', {
           class: 'btn btn-primary', type: 'button',
-          onclick: function () { createSub(this, dialog, nameInput, urlInput, kindSelect, intervalInput, refreshInput, healthInput); }
+          onclick: function () { createSub(this, dialog, nameInput, urlInput, kindSelect, intervalInput, refreshInput, healthInput, sniffInput); }
         }, ['创建订阅'])
       ]
     });
     nameInput.focus();
   }
 
-  function createSub(btn, dialog, nameInput, urlInput, kindSelect, intervalInput, refreshInput, healthInput) {
+  function createSub(btn, dialog, nameInput, urlInput, kindSelect, intervalInput, refreshInput, healthInput, sniffInput) {
     var name = nameInput.value.trim();
     var url = urlInput.value.trim();
     if (!name) { toast('请填写订阅名称', 'error'); return; }
@@ -2050,7 +2152,9 @@
     var interval = intervalInput.value.trim();
     var body = {
       name: name, url: url, kind: kindSelect.value,
-      refresh: !!refreshInput.checked, skip_health: !healthInput.checked
+      refresh: !!refreshInput.checked,
+      skip_health: !healthInput.checked,
+      skip_sniffing: !sniffInput.checked
     };
     if (interval && interval !== '0') body.interval = interval;
 
@@ -2073,6 +2177,7 @@
     }));
     var contentInput = el('textarea', { placeholder: '粘贴 Clash YAML，或 base64 / 明文节点链接（每行一条）' });
     var healthInput = el('input', { type: 'checkbox', checked: true });
+    var sniffInput = el('input', { type: 'checkbox', checked: true });
 
     var dialog = openModal({
       title: '粘贴导入',
@@ -2081,24 +2186,25 @@
       body: el('div', {}, [
         el('div', { class: 'form-grid' }, [
           field('名称', nameInput),
-          field('格式', kindSelect, '不确定就选「自动识别」。')
+          field('格式', kindSelect, '不确定就选「自动」。')
         ]),
         field('内容', contentInput),
-        toggleRow('启用健康检查', healthInput, '关闭后这条订阅的节点不再被后台探测，可节省机场流量；auto 模式下它们没有测速结果，不会被自动选路。')
+        toggleRow('启用健康检查', healthInput, '关闭后这条订阅的节点不再被后台探测，可节省机场流量；auto 模式下它们没有测速结果，不会被自动选路。'),
+        toggleRow('启用流量嗅探', sniffInput, '关闭后这条订阅的账号流量不受按域名分流的自定义规则影响；账号目标里只要有一个订阅开启嗅探，就按开启处理。')
       ]),
       foot: [
         el('div', { class: 'spacer' }),
         el('button', { class: 'btn btn-outline', type: 'button', onclick: function () { dialog.close(); } }, ['取消']),
         el('button', {
           class: 'btn btn-primary', type: 'button',
-          onclick: function () { importSub(this, dialog, nameInput, kindSelect, contentInput, healthInput); }
+          onclick: function () { importSub(this, dialog, nameInput, kindSelect, contentInput, healthInput, sniffInput); }
         }, ['导入'])
       ]
     });
     nameInput.focus();
   }
 
-  function importSub(btn, dialog, nameInput, kindSelect, contentInput, healthInput) {
+  function importSub(btn, dialog, nameInput, kindSelect, contentInput, healthInput, sniffInput) {
     var name = nameInput.value.trim();
     var content = contentInput.value;
     if (!name) { toast('请填写订阅名称', 'error'); return; }
@@ -2106,7 +2212,8 @@
 
     runAction(btn, '导入中', function () {
       return api.post('/api/subs/import', {
-        name: name, kind: kindSelect.value, content: content, skip_health: !healthInput.checked
+        name: name, kind: kindSelect.value, content: content,
+        skip_health: !healthInput.checked, skip_sniffing: !sniffInput.checked
       }).then(function (res) {
         dialog.close();
         var count = res && res.sub ? res.sub.cached_nodes : 0;

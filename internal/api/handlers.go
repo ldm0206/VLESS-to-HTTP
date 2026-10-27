@@ -501,14 +501,15 @@ func (s *Server) handleSubNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 type subInput struct {
-	Name       *string `json:"name"`
-	URL        *string `json:"url"`
-	Kind       *string `json:"kind"`
-	Interval   *string `json:"interval"`
-	Enabled    *bool   `json:"enabled"`
-	SkipHealth *bool   `json:"skip_health"`
-	UserAgent  *string `json:"user_agent"`
-	Refresh    *bool   `json:"refresh"`
+	Name         *string `json:"name"`
+	URL          *string `json:"url"`
+	Kind         *string `json:"kind"`
+	Interval     *string `json:"interval"`
+	Enabled      *bool   `json:"enabled"`
+	SkipHealth   *bool   `json:"skip_health"`
+	SkipSniffing *bool   `json:"skip_sniffing"`
+	UserAgent    *string `json:"user_agent"`
+	Refresh      *bool   `json:"refresh"`
 }
 
 func (s *Server) handleSubCreate(w http.ResponseWriter, r *http.Request) {
@@ -545,6 +546,9 @@ func (s *Server) handleSubCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.SkipHealth != nil {
 		sub.SkipHealth = *in.SkipHealth
+	}
+	if in.SkipSniffing != nil {
+		sub.SkipSniffing = *in.SkipSniffing
 	}
 	if in.Interval != nil {
 		d, err := time.ParseDuration(*in.Interval)
@@ -618,6 +622,9 @@ func (s *Server) handleSubUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.SkipHealth != nil {
 			sub.SkipHealth = *in.SkipHealth
+		}
+		if in.SkipSniffing != nil {
+			sub.SkipSniffing = *in.SkipSniffing
 		}
 		if in.Interval != nil {
 			d, err := time.ParseDuration(*in.Interval)
@@ -697,10 +704,11 @@ func (s *Server) handleSubRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 type importInput struct {
-	Name       string `json:"name"`
-	Kind       string `json:"kind"`
-	Content    string `json:"content"`
-	SkipHealth bool   `json:"skip_health"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	Content      string `json:"content"`
+	SkipHealth   bool   `json:"skip_health"`
+	SkipSniffing bool   `json:"skip_sniffing"`
 }
 
 func (s *Server) handleSubImport(w http.ResponseWriter, r *http.Request) {
@@ -727,15 +735,16 @@ func (s *Server) handleSubImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sub := config.Subscription{
-		ID:         config.NewID("sub"),
-		Name:       strings.TrimSpace(in.Name),
-		Kind:       in.Kind,
-		Enabled:    true,
-		SkipHealth: in.SkipHealth,
-		Interval:   config.Duration(0),
-		LastStatus: "ok",
-		NodeCount:  len(result.Nodes),
-		LastUpdate: time.Now(),
+		ID:           config.NewID("sub"),
+		Name:         strings.TrimSpace(in.Name),
+		Kind:         in.Kind,
+		Enabled:      true,
+		SkipHealth:   in.SkipHealth,
+		SkipSniffing: in.SkipSniffing,
+		Interval:     config.Duration(0),
+		LastStatus:   "ok",
+		NodeCount:    len(result.Nodes),
+		LastUpdate:   time.Now(),
 	}
 	if err := s.eng.Store().Update(func(c *config.Config) error {
 		if c.FindSub(sub.Name) != nil {

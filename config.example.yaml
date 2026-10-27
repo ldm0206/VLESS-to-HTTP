@@ -94,7 +94,8 @@ proxy:
     udp: true
 
   # 流量嗅探：从连接里识别目标域名（http/tls），供 custom_rules 按域名分流。
-  # 面板可改。
+  # 订阅的 skip_sniffing 可以让该订阅的账号绕过这些域名规则；全局关闭后
+  # 所有订阅都不再嗅探。面板可改。
   sniffing: true
 
   # 全局兜底策略，当某个账号的目标节点全部不可用时生效：
@@ -214,6 +215,11 @@ subscriptions:
     # 健康检查时账号走兜底策略。
     # 面板可改（订阅列表里的「健康检查」勾选框）。
     skip_health: false
+    # 跳过这条订阅的流量嗅探：true 时，账号的流量不受 custom_rules 里按域名
+    # 分流的规则影响。Xray 的嗅探是入口级设置，所以这是按账号生效的：
+    # 账号的目标里只要有一个订阅开启嗅探，就按开启处理。
+    # 面板可改（订阅列表里的「嗅探」勾选框）。
+    skip_sniffing: false
     # ---- 以下字段由程序维护（面板只展示）----
     last_update: 2026-01-01T00:00:00Z
     last_status: never # ok | error | never
@@ -230,6 +236,7 @@ subscriptions:
     enabled: true
     user_agent: ""
     skip_health: false
+    skip_sniffing: false
     last_update: 2026-01-01T00:00:00Z
     last_status: ok
     last_error: ""

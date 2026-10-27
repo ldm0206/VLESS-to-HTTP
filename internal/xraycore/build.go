@@ -23,6 +23,10 @@ type PlanUser struct {
 	Password    string
 	OutboundTag string // used unless BalancerTag is set
 	BalancerTag string
+	// SkipSniffing routes this account before the operator's custom rules, so
+	// domain sniffing cannot steer its traffic. The inbound still sniffs when
+	// another account needs it.
+	SkipSniffing bool
 }
 
 // PlanBalancer is a least-ping group used by auto-mode users.
@@ -264,6 +268,25 @@ func (p Plan) routing() map[string]any {
 			"user":        []any{ProbeUser(probe.NodeID)},
 			"outboundTag": node.OutboundTag(probe.NodeID),
 		})
+	}
+
+	// Accounts that opted out of sniffing bypass the operator's custom rules:
+	// there is no sniffed domain for those rules to act on, and the account
+	// asked not to have its traffic split that way.
+	for _, u := range p.Users {
+		if !u.SkipSniffing {
+			continue
+		}
+		rule := map[string]any{
+			"type": "field",
+			"user": []any{u.Name},
+		}
+		if u.BalancerTag != "" {
+			rule["balancerTag"] = u.BalancerTag
+		} else {
+			rule["outboundTag"] = u.OutboundTag
+		}
+		rules = append(rules, rule)
 	}
 
 	// Operator-supplied splitting rules act before per-user routing so a

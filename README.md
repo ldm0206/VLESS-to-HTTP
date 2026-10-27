@@ -318,7 +318,7 @@ v2h core config                          # 看内核实际拿到的配置（排�
 | `proxy.http.enabled` / `listen` | `true` / `0.0.0.0:8080` | HTTP 代理入口（宿主映射到 9000） |
 | `proxy.socks.enabled` / `listen` | `true` / `0.0.0.0:1080` | SOCKS5 入口 |
 | `proxy.socks.udp` | `true` | SOCKS5 是否允许 UDP |
-| `proxy.sniffing` | `true` | 嗅探连接的域名（http/tls），供自定义路由规则使用 |
+| `proxy.sniffing` | `true` | 嗅探连接的域名（http/tls），供自定义路由规则使用；订阅的 `skip_sniffing` 可让该订阅的账号绕过这些域名规则 |
 | `proxy.fallback` | `reject` | 全局兜底：`reject` 拒绝连接，`direct` 直连 |
 | `proxy.dns_servers` | 空 | 内核使用的 DNS 服务器，留空用系统 DNS |
 | `proxy.custom_rules` | 空 | 原样插入 Xray 路由规则（排在按账号分流之前），只能手改文件 |
@@ -350,7 +350,7 @@ v2h core config                          # 看内核实际拿到的配置（排�
 
 ### `subscriptions` / `users` / `revision`
 
-- `subscriptions[]`：`name`（唯一，账号里用它引用）、`url`、`kind`（`auto` / `clash` / `v2ray`）、`interval`（默认 `12h`）、`enabled`、`skip_health`（默认 `false`，设为 `true` 后这条订阅的节点不参与后台健康检查和 auto 模式内核测速，可节省机场流量；代价是 priority 模式不会自动发现这些节点失效，auto 模式下它们没有测速结果、不会被自动选路，全部目标都跳过时账号走兜底策略）、`user_agent`；`id` / `last_update` / `last_status` / `last_error` / `node_count` / `user_info` 由程序维护，其中 `user_info` 是机场报的配额（`upload` / `download` / `total` / `expire`，单位字节，`expire` 是 Unix 秒）。
+- `subscriptions[]`：`name`（唯一，账号里用它引用）、`url`、`kind`（`auto` / `clash` / `v2ray`）、`interval`（默认 `12h`）、`enabled`、`skip_health`（默认 `false`，设为 `true` 后这条订阅的节点不参与后台健康检查和 auto 模式内核测速，可节省机场流量；代价是 priority 模式不会自动发现这些节点失效，auto 模式下它们没有测速结果、不会被自动选路，全部目标都跳过时账号走兜底策略）、`skip_sniffing`（默认 `false`，设为 `true` 后该订阅的账号流量绕过 `custom_rules` 的按域名分流；Xray 嗅探是入口级设置，所以按账号生效：账号目标里只要有一个订阅开启嗅探就按开启处理）、`user_agent`；`id` / `last_update` / `last_status` / `last_error` / `node_count` / `user_info` 由程序维护，其中 `user_info` 是机场报的配额（`upload` / `download` / `total` / `expire`，单位字节，`expire` 是 Unix 秒）。
 - `users[]`：`name`（不能含空格、制表符、换行、冒号）、`password`（明文）、`enabled`、`mode`（`priority` / `auto` / `fixed`）、`fallback`（`inherit` / `reject` / `direct`）、`note`、`targets[]`（`sub` 写订阅名或订阅 id、`node`、`all`、`limit`）、`created_at`；`traffic` 由程序维护。
 - `revision`：每次成功保存 +1，用来判断配置是否已经应用到内核；手改文件时一般不用动它。
 

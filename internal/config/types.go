@@ -112,11 +112,17 @@ type Subscription struct {
 	// no scheduled health checks and no auto-mode latency probes. It saves the
 	// provider traffic those probes cost, at the price of priority mode no
 	// longer noticing when one of these nodes dies.
-	SkipHealth bool      `yaml:"skip_health" json:"skip_health"`
-	LastUpdate time.Time `yaml:"last_update" json:"last_update"`
-	LastStatus string    `yaml:"last_status" json:"last_status"` // ok | error | never
-	LastError  string    `yaml:"last_error" json:"last_error"`
-	NodeCount  int       `yaml:"node_count" json:"node_count"`
+	SkipHealth bool `yaml:"skip_health" json:"skip_health"`
+	// SkipSniffing keeps this subscription's traffic out of domain-based
+	// custom rules. Xray sniffs at the inbound level, so the engine applies
+	// this per account: an account whose usable targets all skip sniffing is
+	// routed before the operator's custom rules. An account with a mix of
+	// sniffing and non-sniffing targets keeps sniffing enabled.
+	SkipSniffing bool      `yaml:"skip_sniffing" json:"skip_sniffing"`
+	LastUpdate   time.Time `yaml:"last_update" json:"last_update"`
+	LastStatus   string    `yaml:"last_status" json:"last_status"` // ok | error | never
+	LastError    string    `yaml:"last_error" json:"last_error"`
+	NodeCount    int       `yaml:"node_count" json:"node_count"`
 	// UserInfo is the quota the provider reported when the subscription was
 	// last fetched. It stays empty for local imports and for providers that
 	// report nothing.

@@ -219,6 +219,65 @@ func TestSkipHealthAppliesToNamedTargets(t *testing.T) {
 	}
 }
 
+// TestSkipSniffingAppliesPerAccount: sniffing is an inbound-wide Xray setting,
+// so the engine applies the subscription choice per account. A mixed account
+// keeps sniffing (and its domain rules); an account made only of opted-out
+// subscriptions bypasses them.
+func TestSkipSniffingAppliesPerAccount(t *testing.T) {
+	skipped := testNode("香港01", "hk1")
+	checked := testNode("日本02", "jp2")
+	cfg := config.Default()
+	cfg.Subscriptions = []config.Subscription{
+		{ID: "sub_a", Name: "机场A", Kind: "auto", Enabled: true, SkipSniffing: true},
+		{ID: "sub_b", Name: "机场B", Kind: "auto", Enabled: true},
+	}
+	cfg.Users = []config.User{
+		{
+			ID: "usr_1", Name: "alice", Password: "pw", Enabled: true,
+			Mode: config.ModePriority, Fallback: config.FallbackInherit,
+			Targets: []config.Target{{Sub: "sub_a", All: true}},
+		},
+		{
+			ID: "usr_2", Name: "bob", Password: "pw", Enabled: true,
+			Mode: config.ModePriority, Fallback: config.FallbackInherit,
+			Targets: []config.Target{{Sub: "sub_a", All: true}, {Sub: "sub_b", All: true}},
+		},
+	}
+	subs := map[string][]node.Node{"sub_a": {skipped}, "sub_b": {checked}}
+	res := resolve(cfg, subs, func(string) bool { return true }, nil, "127.0.0.1:1", "pw")
+
+	byName := map[string]xraycore.PlanUser{}
+	for _, u := range res.Plan.Users {
+		byName[u.Name] = u
+	}
+	if !byName["alice"].SkipSniffing {
+		t.Fatal("an account with only opted-out subscriptions should bypass domain rules")
+	}
+	if byName["bob"].SkipSniffing {
+		t.Fatal("an account with at least one sniffing subscription must keep domain rules")
+	}
+	if !res.Plan.Sniffing {
+		t.Fatal("inbound sniffing is still required for bob")
+	}
+}
+
+func TestAllSkippedSniffingDisablesInboundSniffing(t *testing.T) {
+	nodes := []node.Node{testNode("香港01", "hk1")}
+	cfg := testConfig(config.User{
+		Name: "alice", Password: "pw", Enabled: true,
+		Targets: []config.Target{{Sub: "sub_a", All: true}},
+	})
+	cfg.Subscriptions[0].SkipSniffing = true
+
+	res := resolveWith(t, cfg, nodes, nil)
+	if res.Plan.Sniffing {
+		t.Fatal("inbound sniffing should be off when every target opted out")
+	}
+	if len(res.Plan.Users) != 1 || !res.Plan.Users[0].SkipSniffing {
+		t.Fatalf("account should bypass domain rules: %+v", res.Plan.Users)
+	}
+}
+
 // TestAutoModeAllSkippedUsesFallback: leastPing only sees nodes the
 // observatory measured. With every target skipped there is nothing to choose
 // from, so the account falls back instead of an unselectable balancer.
