@@ -3,9 +3,11 @@ package engine
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ldm0206/vless-to-http/internal/config"
 	"github.com/ldm0206/vless-to-http/internal/node"
+	"github.com/ldm0206/vless-to-http/internal/xraycore"
 )
 
 func testNode(name, server string) node.Node {
@@ -140,6 +142,165 @@ func TestAutoModeUsesBalancer(t *testing.T) {
 	// dead node must not be excluded from the selector - the core decides.
 	if res.Plan.Observatory == nil || len(res.Plan.Observatory.Selector) != 2 {
 		t.Fatalf("observatory = %+v", res.Plan.Observatory)
+	}
+	// The observatory already probes these nodes; the scheduled health prober
+	// must not probe them a second time. Probe accounts stay available for the
+	// panel's on-demand test button.
+	if len(res.Plan.Probes) != 2 {
+		t.Fatalf("auto mode should keep probe accounts for manual tests: %+v", res.Plan.Probes)
+	}
+	if len(res.ProbeNodes) != 0 {
+		t.Fatalf("auto mode nodes should not be scheduled for duplicate probing: %v", res.ProbeNodes)
+	}
+}
+
+// TestObservatoryUsesItsOwnInterval keeps the auto-mode probe cadence from
+// following health.interval, which is the short failover cadence.
+func TestObservatoryUsesItsOwnInterval(t *testing.T) {
+	nodes := []node.Node{testNode("香港01", "hk1")}
+	cfg := testConfig(config.User{
+		Name: "bob", Password: "pw", Enabled: true, Mode: config.ModeAuto,
+		Targets: []config.Target{{Sub: "sub_a", All: true}},
+	})
+	cfg.Health.Interval = config.Duration(30 * time.Second)
+	cfg.Health.ObservatoryInterval = config.Duration(7 * time.Minute)
+
+	res := resolveWith(t, cfg, nodes, nil)
+	if res.Plan.Observatory == nil {
+		t.Fatal("auto mode should install an observatory")
+	}
+	if got := res.Plan.Observatory.Interval; got != "420s" {
+		t.Fatalf("observatory interval = %q, want 420s", got)
+	}
+	if res.ObservatoryNodes != 1 {
+		t.Fatalf("observatory node count = %d, want 1", res.ObservatoryNodes)
+	}
+}
+
+// TestSkipHealthSubscriptionIsNotScheduled keeps a subscription's nodes out of
+// the background prober while leaving them routable and manually testable.
+func TestSkipHealthSubscriptionIsNotScheduled(t *testing.T) {
+	nodes := []node.Node{testNode("香港01", "hk1"), testNode("日本02", "jp2")}
+	cfg := testConfig(config.User{
+		Name: "alice", Password: "pw", Enabled: true,
+		Targets: []config.Target{{Sub: "sub_a", All: true}},
+	})
+	cfg.Subscriptions[0].SkipHealth = true
+
+	res := resolveWith(t, cfg, nodes, nil)
+	if len(res.ProbeNodes) != 0 {
+		t.Fatalf("a skipped subscription must not be probed: %v", res.ProbeNodes)
+	}
+	// Probe accounts stay so the panel's test button still works.
+	if len(res.Plan.Probes) != 2 {
+		t.Fatalf("probe accounts = %d, want 2", len(res.Plan.Probes))
+	}
+	if got := res.Routes["usr_1"].ActiveNode; got != nodes[0].ID {
+		t.Fatalf("priority should still use the first node, got %s", got)
+	}
+}
+
+// TestSkipHealthAppliesToNamedTargets: an explicit node target must inherit
+// its subscription's health policy too, not just the all-nodes target.
+func TestSkipHealthAppliesToNamedTargets(t *testing.T) {
+	nodes := []node.Node{testNode("香港01", "hk1"), testNode("日本02", "jp2")}
+	cfg := testConfig(config.User{
+		Name: "alice", Password: "pw", Enabled: true,
+		Targets: []config.Target{{Sub: "sub_a", Node: "香港01"}},
+	})
+	cfg.Subscriptions[0].SkipHealth = true
+
+	res := resolveWith(t, cfg, nodes, nil)
+	if len(res.ProbeNodes) != 0 {
+		t.Fatalf("a named target from a skipped subscription must not be probed: %v", res.ProbeNodes)
+	}
+	if got := res.Routes["usr_1"].ActiveNode; got != nodes[0].ID {
+		t.Fatalf("named target should still be used, got %q", got)
+	}
+}
+
+// TestAutoModeAllSkippedUsesFallback: leastPing only sees nodes the
+// observatory measured. With every target skipped there is nothing to choose
+// from, so the account falls back instead of an unselectable balancer.
+func TestAutoModeAllSkippedUsesFallback(t *testing.T) {
+	nodes := []node.Node{testNode("香港01", "hk1"), testNode("日本02", "jp2")}
+	cfg := testConfig(config.User{
+		Name: "bob", Password: "pw", Enabled: true, Mode: config.ModeAuto,
+		Targets: []config.Target{{Sub: "sub_a", All: true}},
+	})
+	cfg.Subscriptions[0].SkipHealth = true
+
+	res := resolveWith(t, cfg, nodes, nil)
+	route := res.Routes["usr_1"]
+	if route.Balancer != "" {
+		t.Fatalf("an unobservable balancer must not be emitted: %+v", route)
+	}
+	if route.ActiveNode != "" {
+		t.Fatalf("auto mode should not pin a node: %+v", route)
+	}
+	if route.Outbound != xraycore.BlockTag {
+		t.Fatalf("outbound = %q, want the reject fallback", route.Outbound)
+	}
+	if len(res.Plan.Balancers) != 0 {
+		t.Fatalf("balancers = %+v", res.Plan.Balancers)
+	}
+	if res.Plan.Observatory != nil {
+		t.Fatalf("no observatory should be emitted: %+v", res.Plan.Observatory)
+	}
+	if res.ObservatoryNodes != 0 {
+		t.Fatalf("observatory nodes = %d, want 0", res.ObservatoryNodes)
+	}
+	if len(res.Plan.Probes) != 2 {
+		t.Fatalf("manual probe accounts should stay available: %+v", res.Plan.Probes)
+	}
+}
+
+// TestAutoModePartiallySkippedOnlyProbesCheckedNodes keeps skipped nodes in
+// the balancer selector but out of the observatory, and says so in the reason.
+func TestAutoModePartiallySkippedOnlyProbesCheckedNodes(t *testing.T) {
+	checked := testNode("香港01", "hk1")
+	skipped := testNode("日本02", "jp2")
+	cfg := config.Default()
+	cfg.Subscriptions = []config.Subscription{
+		{ID: "sub_a", Name: "机场A", Kind: "auto", Enabled: true},
+		{ID: "sub_b", Name: "机场B", Kind: "auto", Enabled: true, SkipHealth: true},
+	}
+	cfg.Users = []config.User{{
+		ID: "usr_1", Name: "bob", Password: "pw", Enabled: true,
+		Mode: config.ModeAuto, Fallback: config.FallbackInherit,
+		Targets: []config.Target{
+			{Sub: "sub_a", All: true},
+			{Sub: "sub_b", All: true},
+		},
+	}}
+	subs := map[string][]node.Node{"sub_a": {checked}, "sub_b": {skipped}}
+	res := resolve(cfg, subs, func(string) bool { return true }, nil, "127.0.0.1:1", "pw")
+
+	route := res.Routes["usr_1"]
+	if route.Balancer == "" {
+		t.Fatal("auto mode with at least one checked node should keep its balancer")
+	}
+	if route.Reason == "" || !strings.Contains(route.Reason, "不参与自动测速") {
+		t.Fatalf("reason should mention the skipped nodes, got %q", route.Reason)
+	}
+	if res.ObservatoryNodes != 1 {
+		t.Fatalf("observatory nodes = %d, want 1", res.ObservatoryNodes)
+	}
+	if res.Plan.Observatory == nil || len(res.Plan.Observatory.Selector) != 1 {
+		t.Fatalf("observatory = %+v", res.Plan.Observatory)
+	}
+	if got := res.Plan.Observatory.Selector[0]; got != node.OutboundTag(checked.ID) {
+		t.Fatalf("observatory selector = %q, want %q", got, node.OutboundTag(checked.ID))
+	}
+	if len(res.Plan.Balancers) != 1 {
+		t.Fatalf("balancers = %+v", res.Plan.Balancers)
+	}
+	balancer := res.Plan.Balancers[0]
+	if balancer.Fallback != "block" {
+		t.Fatalf("fallback = %q, want block", balancer.Fallback)
+	}
+	if len(balancer.Selector) != 2 {
+		t.Fatalf("balancer should still contain both nodes: %v", balancer.Selector)
 	}
 }
 

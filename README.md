@@ -11,12 +11,12 @@
 
 ## 特性
 
-- **多账号**：每个账号一对「用户名 + 密码」，客户端用标准 HTTP 代理或 SOCKS5 认证接入，互不影响，流量分别统计。
+- **多账号**：每个账号一对「用户名 + 密码」，客户端用标准 HTTP 代理或 SOCKS5 认证接入，互不影响，流量分别统计；每个账号都能看最近 30 天按天 / 按小时的上行、下行图表。
 - **订阅驱动**：直接填 Clash(mihomo) YAML 或 base64 节点链接的订阅地址，定时自动更新；也可以粘贴本地节点文件离线导入。
 - **按用户分流**：一个账号可以绑定「某个订阅的某个节点」「一条订阅的全部节点」「多条订阅混合」，顺序即优先级。
 - **优先级 / 自动切换**：三种选路模式（priority / auto / fixed），节点挂了自动换下一个。
 - **兜底策略**：所有目标节点都不可用时，按配置选择「拒绝连接」或「直连」，不会静默把流量漏出去。
-- **健康检查**：后台定时通过节点真实发起请求测活性和延迟，驱动 priority 模式的切换。
+- **健康检查**：后台定时通过节点真实发起请求测活性和延迟，驱动 priority 模式的切换；auto 模式由内核测速，二者都会消耗订阅流量，可在设置里调整间隔。
 - **三种入口**：网页控制面板、终端控制台（TUI）、命令行（CLI），三者操作的是同一个实例。
 - **日志轮转**：按大小切分、按份数保留，面板/TUI 实时跟随，支持按账号和级别过滤。
 - **Cloudflare Turnstile**：给公网暴露的登录页加人机验证，可选。
@@ -115,7 +115,7 @@ curl --socks5-hostname alice:secret123@127.0.0.1:1080 https://api.ipify.org
 | **目标（target）** | 账号可以用哪些节点，写成「订阅:节点」；`订阅:*` 表示整条订阅，还可以加 limit 限制取前 N 个。目标的顺序就是优先级顺序。 |
 | **模式（mode）** | 账号怎么在这些目标里挑节点，三种：priority / auto / fixed。 |
 | **兜底策略（fallback）** | 所有目标都不可用时怎么办：`reject`（拒绝连接，默认）或 `direct`（直连）。账号可以单独设置，也可以跟随全局 `proxy.fallback`。 |
-| **健康检查** | 后台按 `health.interval` 通过每个节点请求一次 `health.probe_url`，连续失败 `health.failures` 次标记为不可用，连续成功 `health.successes` 次恢复。priority 模式的切换由它驱动。 |
+| **健康检查** | 后台按 `health.interval` 通过每个节点请求一次 `health.probe_url`，连续失败 `health.failures` 次标记为不可用，连续成功 `health.successes` 次恢复。priority 模式的切换由它驱动。这些探测是真实流量，会计入机场配额，面板概览里的「全节点出站 / 其中探测」可以看到实际消耗。 |
 | **剩余流量** | 机场在订阅响应头 `subscription-userinfo` 里报的账户配额，每次更新订阅时一并读取。面板「订阅」页、TUI 和 `v2h sub list` 会显示剩余量、已用量和到期日；`total=0` 是不限量，机场不报就是 `—`。 |
 
 ### 三种选路模式
@@ -332,16 +332,25 @@ v2h core config                          # 看内核实际拿到的配置（排�
 | --- | --- | --- |
 | `health.enabled` | `true` | 是否做健康检查 |
 | `health.probe_url` | `https://www.gstatic.com/generate_204` | 探测地址，应返回 204/200 |
-| `health.interval` | `30s` | 探测间隔（auto 模式的测速间隔也取它，最长按 60s 算） |
+| `health.interval` | `30s` | priority 模式的存活探测间隔 |
+| `health.observatory_interval` | `5m` | auto 模式的内核测速间隔；每轮探测全部候选节点，调大能显著减少流量 |
 | `health.timeout` | `5s` | 单次探测超时 |
 | `health.failures` | `2` | 连续失败几次算不可用 |
 | `health.successes` | `1` | 连续成功几次算恢复 |
 | `health.switch_cooldown` | `15s` | 两次健康检查触发的切换之间至少间隔多久（防止抖动导致内核反复重启） |
 | `health.max_probes` | `64` | 最多给多少个节点建探测出口 |
 
+> 健康检查和 auto 模式测速都会通过节点发起真实请求，机场按订阅计费，所以它们会消耗你的配额。
+> auto 模式的节点由内核测速维护，本程序不会再用定时健康检查重复探测它们；面板概览里的
+> 「健康探测」是本程序健康检查可单独统计的流量，「auto 测速 N 个节点」则是内核测速覆盖的范围。
+> 节点很多时，把 `health.observatory_interval` 调大（例如 `10m` 或 `30m`），或给账号目标加
+> `limit` 限制候选节点数。只想让某条订阅完全不参与探测，就在订阅页关掉它的「健康检查」
+> （配置里是 `skip_health: true`），这样它的节点既不会被后台健康检查，也不会被 auto 模式测速；
+> 相应地，auto 模式没有它们的延迟数据，不会自动选中它们，全部目标都跳过时账号走兜底策略。
+
 ### `subscriptions` / `users` / `revision`
 
-- `subscriptions[]`：`name`（唯一，账号里用它引用）、`url`、`kind`（`auto` / `clash` / `v2ray`）、`interval`（默认 `12h`）、`enabled`、`user_agent`；`id` / `last_update` / `last_status` / `last_error` / `node_count` / `user_info` 由程序维护，其中 `user_info` 是机场报的配额（`upload` / `download` / `total` / `expire`，单位字节，`expire` 是 Unix 秒）。
+- `subscriptions[]`：`name`（唯一，账号里用它引用）、`url`、`kind`（`auto` / `clash` / `v2ray`）、`interval`（默认 `12h`）、`enabled`、`skip_health`（默认 `false`，设为 `true` 后这条订阅的节点不参与后台健康检查和 auto 模式内核测速，可节省机场流量；代价是 priority 模式不会自动发现这些节点失效，auto 模式下它们没有测速结果、不会被自动选路，全部目标都跳过时账号走兜底策略）、`user_agent`；`id` / `last_update` / `last_status` / `last_error` / `node_count` / `user_info` 由程序维护，其中 `user_info` 是机场报的配额（`upload` / `download` / `total` / `expire`，单位字节，`expire` 是 Unix 秒）。
 - `users[]`：`name`（不能含空格、制表符、换行、冒号）、`password`（明文）、`enabled`、`mode`（`priority` / `auto` / `fixed`）、`fallback`（`inherit` / `reject` / `direct`）、`note`、`targets[]`（`sub` 写订阅名或订阅 id、`node`、`all`、`limit`）、`created_at`；`traffic` 由程序维护。
 - `revision`：每次成功保存 +1，用来判断配置是否已经应用到内核；手改文件时一般不用动它。
 

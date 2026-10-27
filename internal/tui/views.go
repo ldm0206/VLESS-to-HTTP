@@ -218,9 +218,11 @@ func (m *model) viewOverview(w, h int) string {
 	lines = append(lines, m.kv("HTTP 代理", listenLine(proxy, "http", "http_on"), lipgloss.NewStyle(), w))
 	lines = append(lines, m.kv("SOCKS5", listenLine(proxy, "socks", "socks_on", "socks_udp"), lipgloss.NewStyle(), w))
 	lines = append(lines, m.kv("兜底策略", fallbackLabel(stringField(proxy, "fallback")), lipgloss.NewStyle(), w))
-	lines = append(lines, m.kv("累计流量",
-		fmt.Sprintf("上行 %s / 下行 %s", client.FormatBytes(st.Totals.Up), client.FormatBytes(st.Totals.Down)),
-		lipgloss.NewStyle(), w))
+	trafficText := fmt.Sprintf("上行 %s / 下行 %s", client.FormatBytes(st.Totals.Up), client.FormatBytes(st.Totals.Down))
+	if probe := st.ProbeTraffic.Up + st.ProbeTraffic.Down; probe > 0 {
+		trafficText += "（探测 " + client.FormatBytes(probe) + "）"
+	}
+	lines = append(lines, m.kv("累计流量", trafficText, lipgloss.NewStyle(), w))
 	if st.NodeSummary.Total > 0 {
 		lines = append(lines, m.kv("节点健康",
 			fmt.Sprintf("共 %d 个：可用 %d，不可用 %d", st.NodeSummary.Total, st.NodeSummary.Alive, st.NodeSummary.Dead),

@@ -43,6 +43,7 @@ type Engine struct {
 	restarts  int
 	lastErr   string
 	applied   time.Time
+	probeWarn string
 
 	pendingReason string
 	pendingTimer  *time.Timer
@@ -54,10 +55,15 @@ type Engine struct {
 	online  map[string][]string
 
 	// accumulated traffic, keyed by user id
-	trafficMu sync.Mutex
-	totals    map[string]config.Traffic
-	lastRaw   map[string]xraycore.Traffic
-	dirty     bool
+	trafficMu   sync.Mutex
+	totals      map[string]config.Traffic
+	lastRaw     map[string]xraycore.Traffic
+	probeTotals config.Traffic
+	probeRaw    map[string]xraycore.Traffic
+	// history is per-user hourly traffic, retained for a rolling 31 days so a
+	// 30-day chart always covers whole local days.
+	history map[string]map[int64]config.Traffic
+	dirty   bool
 
 	// broken records nodes the core refused to start with, so one malformed
 	// server in a subscription cannot take the proxy down for everyone.
@@ -102,6 +108,8 @@ func New(store *config.Store, cache *subscription.Cache, logger *logs.Logger, da
 		online:    map[string][]string{},
 		totals:    map[string]config.Traffic{},
 		lastRaw:   map[string]xraycore.Traffic{},
+		probeRaw:  map[string]xraycore.Traffic{},
+		history:   map[string]map[int64]config.Traffic{},
 		broken:    map[string]string{},
 	}
 	e.prober.SetEndpoint(e.probeAddr, e.probePass)
@@ -255,6 +263,20 @@ func (e *Engine) Apply(reason string) error {
 
 	e.logger.Infof("内核已应用新配置（%s）：接入 %d 个节点，%d 个账号",
 		reason, len(res.UsedNodes), len(res.Plan.Users))
+	var probeWarning string
+	if n := res.ObservatoryNodes; n >= 20 {
+		if interval := cfg.Health.ObservatoryInterval.D(); interval < 10*time.Minute {
+			probeWarning = fmt.Sprintf("auto 模式的内核测速覆盖 %d 个节点（每 %s），探测流量会计入机场配额；可在设置里调大「自动测速间隔」或限制账号目标数量", n, interval)
+		}
+	}
+	// Apply also runs on health flips; log this once per distinct value.
+	e.mu.Lock()
+	changed := probeWarning != "" && e.probeWarn != probeWarning
+	e.probeWarn = probeWarning
+	e.mu.Unlock()
+	if changed {
+		e.logger.Warnf("%s", probeWarning)
+	}
 	for _, route := range res.Routes {
 		if route.ActiveNode != "" || route.Reason != "" {
 			e.logger.Debugf("账号 %s：%s", route.UserName, e.describeRoute(route))
@@ -388,8 +410,10 @@ func (e *Engine) TestNodes(ctx context.Context, nodeIDs []string) map[string]hea
 
 	probeable := map[string]bool{}
 	if res != nil {
-		for _, id := range res.ProbeNodes {
-			probeable[id] = true
+		// Probe accounts exist for every materialised candidate, including
+		// auto-mode nodes that the scheduled prober leaves to the core.
+		for _, probe := range res.Plan.Probes {
+			probeable[probe.NodeID] = true
 		}
 	}
 

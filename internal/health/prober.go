@@ -108,7 +108,6 @@ func (p *Prober) OnChange(fn func()) { p.onChange = fn }
 // the map cannot grow without bound as subscriptions change.
 func (p *Prober) Track(nodeIDs []string) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	keep := make(map[string]bool, len(nodeIDs))
 	for _, id := range nodeIDs {
 		keep[id] = true
@@ -118,11 +117,28 @@ func (p *Prober) Track(nodeIDs []string) {
 			p.states[id] = &State{NodeID: id, Alive: true}
 		}
 	}
+	var removed []string
 	for id := range p.states {
 		if !keep[id] {
 			delete(p.states, id)
+			removed = append(removed, id)
 		}
 	}
+	p.mu.Unlock()
+
+	if len(removed) == 0 {
+		return
+	}
+	// Drop the cached clients too: with keep-alives on they may still hold a
+	// tunneled connection, and the node is gone from the configuration.
+	p.clientMu.Lock()
+	for _, id := range removed {
+		if c, ok := p.clients[id]; ok {
+			c.CloseIdleConnections()
+			delete(p.clients, id)
+		}
+	}
+	p.clientMu.Unlock()
 }
 
 // Snapshot copies the current health of every tracked node.
@@ -361,11 +377,16 @@ func (p *Prober) httpClient(nodeID string) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Keep the tunneled connection alive between probes. Opening a new one each
+	// time pays a full TCP+TLS handshake through the node, and the provider
+	// bills those bytes against the subscription; reusing it makes a probe cost
+	// a few hundred bytes instead of several kilobytes.
 	c := &http.Client{
 		Transport: &http.Transport{
 			DialContext:         dialer.DialContext,
-			DisableKeepAlives:   true,
+			MaxIdleConns:        1,
 			MaxIdleConnsPerHost: 1,
+			IdleConnTimeout:     2 * time.Minute,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}

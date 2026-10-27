@@ -161,11 +161,12 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 			"theme":      cfg.Panel.Theme,
 		},
 		Health: map[string]any{
-			"enabled":    cfg.Health.Enabled,
-			"probe_url":  cfg.Health.ProbeURL,
-			"interval":   cfg.Health.Interval.String(),
-			"timeout":    cfg.Health.Timeout.String(),
-			"thresholds": fmt.Sprintf("连续 %d 次失败判死 / %d 次成功判活", cfg.Health.Failures, cfg.Health.Successes),
+			"enabled":              cfg.Health.Enabled,
+			"probe_url":            cfg.Health.ProbeURL,
+			"interval":             cfg.Health.Interval.String(),
+			"observatory_interval": cfg.Health.ObservatoryInterval.String(),
+			"timeout":              cfg.Health.Timeout.String(),
+			"thresholds":           fmt.Sprintf("连续 %d 次失败判死 / %d 次成功判活", cfg.Health.Failures, cfg.Health.Successes),
 		},
 		Logs: map[string]any{
 			"level":       cfg.Logs.Level,
@@ -445,6 +446,36 @@ func (s *Server) handleUserTrafficReset(w http.ResponseWriter, r *http.Request) 
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// handleUserTrafficHistory serves the account's hourly buckets. The panel
+// aggregates them into local calendar days or hours.
+func (s *Server) handleUserTrafficHistory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	user := s.eng.Store().Get().FindUser(id)
+	if user == nil {
+		s.writeError(w, http.StatusNotFound, "账号不存在")
+		return
+	}
+	days := 30
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			days = v
+		}
+	}
+	if days < 1 {
+		days = 1
+	}
+	if days > 31 {
+		days = 31
+	}
+	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Truncate(time.Hour)
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"user_id": user.ID,
+		"name":    user.Name,
+		"days":    days,
+		"buckets": s.eng.TrafficHistory(user.ID, since),
+	})
+}
+
 // --- subscriptions -------------------------------------------------------
 
 func (s *Server) handleSubList(w http.ResponseWriter, r *http.Request) {
@@ -470,13 +501,14 @@ func (s *Server) handleSubNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 type subInput struct {
-	Name      *string `json:"name"`
-	URL       *string `json:"url"`
-	Kind      *string `json:"kind"`
-	Interval  *string `json:"interval"`
-	Enabled   *bool   `json:"enabled"`
-	UserAgent *string `json:"user_agent"`
-	Refresh   *bool   `json:"refresh"`
+	Name       *string `json:"name"`
+	URL        *string `json:"url"`
+	Kind       *string `json:"kind"`
+	Interval   *string `json:"interval"`
+	Enabled    *bool   `json:"enabled"`
+	SkipHealth *bool   `json:"skip_health"`
+	UserAgent  *string `json:"user_agent"`
+	Refresh    *bool   `json:"refresh"`
 }
 
 func (s *Server) handleSubCreate(w http.ResponseWriter, r *http.Request) {
@@ -510,6 +542,9 @@ func (s *Server) handleSubCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Enabled != nil {
 		sub.Enabled = *in.Enabled
+	}
+	if in.SkipHealth != nil {
+		sub.SkipHealth = *in.SkipHealth
 	}
 	if in.Interval != nil {
 		d, err := time.ParseDuration(*in.Interval)
@@ -581,6 +616,9 @@ func (s *Server) handleSubUpdate(w http.ResponseWriter, r *http.Request) {
 		if in.Enabled != nil {
 			sub.Enabled = *in.Enabled
 		}
+		if in.SkipHealth != nil {
+			sub.SkipHealth = *in.SkipHealth
+		}
 		if in.Interval != nil {
 			d, err := time.ParseDuration(*in.Interval)
 			if err != nil {
@@ -594,6 +632,7 @@ func (s *Server) handleSubUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.applyNow()
 	s.writeJSON(w, http.StatusOK, map[string]any{"sub": s.subStatus(id)})
 }
 
@@ -658,9 +697,10 @@ func (s *Server) handleSubRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 type importInput struct {
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Content string `json:"content"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	Content    string `json:"content"`
+	SkipHealth bool   `json:"skip_health"`
 }
 
 func (s *Server) handleSubImport(w http.ResponseWriter, r *http.Request) {
@@ -691,6 +731,7 @@ func (s *Server) handleSubImport(w http.ResponseWriter, r *http.Request) {
 		Name:       strings.TrimSpace(in.Name),
 		Kind:       in.Kind,
 		Enabled:    true,
+		SkipHealth: in.SkipHealth,
 		Interval:   config.Duration(0),
 		LastStatus: "ok",
 		NodeCount:  len(result.Nodes),
@@ -823,14 +864,15 @@ func settingsView(cfg *config.Config) map[string]any {
 		"proxy": cfg.Proxy,
 		"logs":  cfg.Logs,
 		"health": map[string]any{
-			"enabled":         cfg.Health.Enabled,
-			"probe_url":       cfg.Health.ProbeURL,
-			"interval":        cfg.Health.Interval.String(),
-			"timeout":         cfg.Health.Timeout.String(),
-			"failures":        cfg.Health.Failures,
-			"successes":       cfg.Health.Successes,
-			"switch_cooldown": cfg.Health.SwitchCooldown.String(),
-			"max_probes":      cfg.Health.MaxProbes,
+			"enabled":              cfg.Health.Enabled,
+			"probe_url":            cfg.Health.ProbeURL,
+			"interval":             cfg.Health.Interval.String(),
+			"observatory_interval": cfg.Health.ObservatoryInterval.String(),
+			"timeout":              cfg.Health.Timeout.String(),
+			"failures":             cfg.Health.Failures,
+			"successes":            cfg.Health.Successes,
+			"switch_cooldown":      cfg.Health.SwitchCooldown.String(),
+			"max_probes":           cfg.Health.MaxProbes,
 		},
 	}
 }
@@ -877,14 +919,15 @@ type logsInput struct {
 }
 
 type healthInput struct {
-	Enabled        *bool   `json:"enabled"`
-	ProbeURL       *string `json:"probe_url"`
-	Interval       *string `json:"interval"`
-	Timeout        *string `json:"timeout"`
-	Failures       *int    `json:"failures"`
-	Successes      *int    `json:"successes"`
-	SwitchCooldown *string `json:"switch_cooldown"`
-	MaxProbes      *int    `json:"max_probes"`
+	Enabled             *bool   `json:"enabled"`
+	ProbeURL            *string `json:"probe_url"`
+	Interval            *string `json:"interval"`
+	ObservatoryInterval *string `json:"observatory_interval"`
+	Timeout             *string `json:"timeout"`
+	Failures            *int    `json:"failures"`
+	Successes           *int    `json:"successes"`
+	SwitchCooldown      *string `json:"switch_cooldown"`
+	MaxProbes           *int    `json:"max_probes"`
 }
 
 func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
@@ -998,6 +1041,7 @@ func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
 				dest *config.Duration
 			}{
 				{in.Health.Interval, &c.Health.Interval},
+				{in.Health.ObservatoryInterval, &c.Health.ObservatoryInterval},
 				{in.Health.Timeout, &c.Health.Timeout},
 				{in.Health.SwitchCooldown, &c.Health.SwitchCooldown},
 			} {

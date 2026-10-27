@@ -160,9 +160,16 @@ health:
   # 探测用的 URL，应当返回 204/200 且体积很小。面板可改。
   probe_url: "https://www.gstatic.com/generate_204"
 
-  # 探测间隔。也被 auto 模式的 balancer 用作测速间隔（最长按 60s 计）。
+  # priority 模式的存活探测间隔（只探测账号用到的节点，最多 max_probes 个）；
+  # auto 模式的节点由内核测速维护，不会被这里重复探测。
+  # 每次探测都会通过节点真实请求 probe_url，会计入机场流量。
   # 面板可改。
   interval: 30s
+
+  # auto 模式的内核测速间隔。每一轮会把该账号 balancer 里的所有节点各测一遍，
+  # 节点越多、间隔越短，偷跑的流量越大；30 个节点 + 5m 大约每天几十 MB，
+  # 300 个节点 + 30s 可以到每天数 GB。面板可改。
+  observatory_interval: 5m
 
   # 单次探测超时。面板可改。
   timeout: 5s
@@ -201,6 +208,12 @@ subscriptions:
     enabled: true
     # 拉取时使用的 User-Agent，留空用内置默认值。面板可改。
     user_agent: ""
+    # 跳过这条订阅的健康检查：true 时后台不再探测它的节点，auto 模式也不会
+    # 对它做内核测速，可省下机场流量。代价是 priority 模式不会自动发现这些
+    # 节点失效；auto 模式下它们没有测速结果，不会被自动选路，全部目标都跳过
+    # 健康检查时账号走兜底策略。
+    # 面板可改（订阅列表里的「健康检查」勾选框）。
+    skip_health: false
     # ---- 以下字段由程序维护（面板只展示）----
     last_update: 2026-01-01T00:00:00Z
     last_status: never # ok | error | never
@@ -216,6 +229,7 @@ subscriptions:
     interval: 0s
     enabled: true
     user_agent: ""
+    skip_health: false
     last_update: 2026-01-01T00:00:00Z
     last_status: ok
     last_error: ""

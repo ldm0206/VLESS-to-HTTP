@@ -84,25 +84,35 @@ type Logs struct {
 
 // Health drives the node prober that powers priority failover.
 type Health struct {
-	Enabled        bool     `yaml:"enabled" json:"enabled"`
-	ProbeURL       string   `yaml:"probe_url" json:"probe_url"`
-	Interval       Duration `yaml:"interval" json:"interval"`
-	Timeout        Duration `yaml:"timeout" json:"timeout"`
-	Failures       int      `yaml:"failures" json:"failures"`
-	Successes      int      `yaml:"successes" json:"successes"`
-	SwitchCooldown Duration `yaml:"switch_cooldown" json:"switch_cooldown"`
-	MaxProbes      int      `yaml:"max_probes" json:"max_probes"`
+	Enabled  bool     `yaml:"enabled" json:"enabled"`
+	ProbeURL string   `yaml:"probe_url" json:"probe_url"`
+	Interval Duration `yaml:"interval" json:"interval"`
+	// ObservatoryInterval is how often the core re-measures every candidate
+	// node for auto mode. It is separate from Interval because the core probes
+	// all of a balancer's nodes on each round, and a short interval over a large
+	// subscription burns real provider traffic.
+	ObservatoryInterval Duration `yaml:"observatory_interval" json:"observatory_interval"`
+	Timeout             Duration `yaml:"timeout" json:"timeout"`
+	Failures            int      `yaml:"failures" json:"failures"`
+	Successes           int      `yaml:"successes" json:"successes"`
+	SwitchCooldown      Duration `yaml:"switch_cooldown" json:"switch_cooldown"`
+	MaxProbes           int      `yaml:"max_probes" json:"max_probes"`
 }
 
 // Subscription is a remote Clash or v2ray node list.
 type Subscription struct {
-	ID         string    `yaml:"id" json:"id"`
-	Name       string    `yaml:"name" json:"name"`
-	URL        string    `yaml:"url" json:"url"`
-	Kind       string    `yaml:"kind" json:"kind"` // auto | clash | v2ray
-	Interval   Duration  `yaml:"interval" json:"interval"`
-	Enabled    bool      `yaml:"enabled" json:"enabled"`
-	UserAgent  string    `yaml:"user_agent" json:"user_agent"`
+	ID        string   `yaml:"id" json:"id"`
+	Name      string   `yaml:"name" json:"name"`
+	URL       string   `yaml:"url" json:"url"`
+	Kind      string   `yaml:"kind" json:"kind"` // auto | clash | v2ray
+	Interval  Duration `yaml:"interval" json:"interval"`
+	Enabled   bool     `yaml:"enabled" json:"enabled"`
+	UserAgent string   `yaml:"user_agent" json:"user_agent"`
+	// SkipHealth stops all background probing of this subscription's nodes:
+	// no scheduled health checks and no auto-mode latency probes. It saves the
+	// provider traffic those probes cost, at the price of priority mode no
+	// longer noticing when one of these nodes dies.
+	SkipHealth bool      `yaml:"skip_health" json:"skip_health"`
 	LastUpdate time.Time `yaml:"last_update" json:"last_update"`
 	LastStatus string    `yaml:"last_status" json:"last_status"` // ok | error | never
 	LastError  string    `yaml:"last_error" json:"last_error"`

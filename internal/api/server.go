@@ -111,6 +111,7 @@ func (s *Server) routes() error {
 	s.mux.HandleFunc("PATCH /api/users/{id}", s.auth(s.handleUserUpdate))
 	s.mux.HandleFunc("DELETE /api/users/{id}", s.auth(s.handleUserDelete))
 	s.mux.HandleFunc("POST /api/users/{id}/traffic/reset", s.auth(s.handleUserTrafficReset))
+	s.mux.HandleFunc("GET /api/users/{id}/traffic/history", s.auth(s.handleUserTrafficHistory))
 
 	s.mux.HandleFunc("GET /api/subs", s.auth(s.handleSubList))
 	s.mux.HandleFunc("POST /api/subs", s.auth(s.handleSubCreate))

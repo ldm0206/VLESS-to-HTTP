@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ldm0206/vless-to-http/internal/config"
 	"github.com/ldm0206/vless-to-http/internal/node"
@@ -30,7 +31,11 @@ type resolution struct {
 	Plan       xraycore.Plan
 	Routes     map[string]*UserRoute // by user id
 	ProbeNodes []string
-	UsedNodes  []node.Node
+	// ObservatoryNodes is how many nodes the core's auto-mode latency probes
+	// cover. They have no client account, so their traffic is invisible to
+	// per-user statistics.
+	ObservatoryNodes int
+	UsedNodes        []node.Node
 	// TagUsers maps an outbound tag to the users whose traffic can use it,
 	// which is how access log lines are attributed when the client IP is not
 	// in the online map.
@@ -49,6 +54,10 @@ func resolve(cfg *config.Config, subs map[string][]node.Node, healthy func(strin
 	}
 
 	index := newSubIndex(cfg, subs)
+	skipHealth := make(map[string]bool, len(cfg.Subscriptions))
+	for i := range cfg.Subscriptions {
+		skipHealth[cfg.Subscriptions[i].ID] = cfg.Subscriptions[i].SkipHealth
+	}
 	used := map[string]bool{}
 	var usedNodes []node.Node
 
@@ -66,6 +75,10 @@ func resolve(cfg *config.Config, subs map[string][]node.Node, healthy func(strin
 	}
 
 	probeCandidates := map[string]node.Node{}
+	// scheduledProbes is the subset our own prober checks periodically. Auto
+	// mode nodes are left out: the core's observatory already pings them, and
+	// probing them twice just doubles the provider traffic.
+	scheduledProbes := map[string]node.Node{}
 	balancerNodes := map[string]bool{}
 
 	for i := range cfg.Users {
@@ -105,6 +118,9 @@ func resolve(cfg *config.Config, subs map[string][]node.Node, healthy func(strin
 					res.NodeSubs[n.ID] = n.SubID
 				}
 				probeCandidates[n.ID] = n
+				if u.Mode != config.ModeAuto && !skipHealth[n.SubID] {
+					scheduledProbes[n.ID] = n
+				}
 			}
 		}
 
@@ -124,10 +140,29 @@ func resolve(cfg *config.Config, subs map[string][]node.Node, healthy func(strin
 			route.Reason = "没有可用的目标节点，走兜底策略"
 
 		case u.Mode == config.ModeAuto:
+			checked := 0
+			for _, n := range usable {
+				if !skipHealth[n.SubID] {
+					checked++
+				}
+			}
+			if checked == 0 {
+				// leastPing only considers nodes the observatory has measured.
+				// With every target skipped there is nothing to choose from, so
+				// take the account's fallback instead of an empty balancer.
+				route.Outbound = fallbackTag
+				route.Reason = "所有目标都关闭了健康检查，使用兜底策略"
+				break
+			}
 			route.Balancer = balancerTag(u.ID)
 			for _, n := range usable {
-				balancerNodes[n.ID] = true
+				if !skipHealth[n.SubID] {
+					balancerNodes[n.ID] = true
+				}
 				res.addTagUser(node.OutboundTag(n.ID), u.Name)
+			}
+			if checked < len(usable) {
+				route.Reason = fmt.Sprintf("%d 个节点关闭了健康检查，不参与自动测速", len(usable)-checked)
 			}
 
 		case u.Mode == config.ModeFixed:
@@ -159,7 +194,8 @@ func resolve(cfg *config.Config, subs map[string][]node.Node, healthy func(strin
 	}
 
 	// Probe accounting: every materialised node gets a probe account so the
-	// panel can show a real latency and priority users can fail over.
+	// panel's test button works. Only the scheduled subset is probed in the
+	// background; auto-mode nodes are left to the core's observatory.
 	probeIDs := make([]string, 0, len(probeCandidates))
 	for id := range probeCandidates {
 		probeIDs = append(probeIDs, id)
@@ -171,7 +207,9 @@ func resolve(cfg *config.Config, subs map[string][]node.Node, healthy func(strin
 	for _, id := range probeIDs {
 		n := probeCandidates[id]
 		plan.Probes = append(plan.Probes, xraycore.PlanProbe{NodeID: id, Name: n.Label()})
-		res.ProbeNodes = append(res.ProbeNodes, id)
+		if _, ok := scheduledProbes[id]; ok {
+			res.ProbeNodes = append(res.ProbeNodes, id)
+		}
 	}
 
 	// Balancers: one per auto-mode user, over exactly their own nodes.
@@ -196,10 +234,18 @@ func resolve(cfg *config.Config, subs map[string][]node.Node, healthy func(strin
 		})
 	}
 
+	res.ObservatoryNodes = len(balancerNodes)
 	if len(balancerNodes) > 0 {
-		interval := cfg.Health.Interval.D()
-		if interval <= 0 || interval > 60e9 {
-			interval = 60e9
+		// Every round pings every node in the balancer, so this interval is the
+		// main driver of probe traffic for auto-mode accounts. It is deliberately
+		// independent of the priority-mode prober interval.
+		interval := cfg.Health.ObservatoryInterval.D()
+		if interval <= 0 {
+			interval = 5 * time.Minute
+		}
+		if interval < 10*time.Second {
+			// Xray clamps anything shorter than this and logs a warning.
+			interval = 10 * time.Second
 		}
 		selector := make([]string, 0, len(balancerNodes))
 		for id := range balancerNodes {
@@ -290,9 +336,9 @@ func (s *subIndex) resolveTargets(u *config.User) ([]node.Node, []config.Resolve
 			return
 		}
 		seen[n.ID] = true
-		if n.SubID == "" {
-			n.SubID = subID
-		}
+		// Stamp the source subscription even when the cache parser left it
+		// empty; health-check policy is looked up by it.
+		n.SubID = subID
 		nodes = append(nodes, n)
 		resolved = append(resolved, config.ResolvedTarget{
 			Sub:      subID,
@@ -373,30 +419,37 @@ func (s *subIndex) listsFor(subID string) []subList {
 }
 
 // find locates a node by id first (stable across renames) and by name second.
+// The returned copy carries the subscription it came from, which the health
+// policy is looked up by.
 func (s *subIndex) find(subID, key string) *node.Node {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil
 	}
 	lists := s.listsFor(subID)
+	stamp := func(list subList, i int) *node.Node {
+		n := list.nodes[i]
+		n.SubID = list.subID
+		return &n
+	}
 	for _, list := range lists {
 		for i := range list.nodes {
 			if list.nodes[i].ID == key {
-				return &list.nodes[i]
+				return stamp(list, i)
 			}
 		}
 	}
 	for _, list := range lists {
 		for i := range list.nodes {
 			if list.nodes[i].Name == key {
-				return &list.nodes[i]
+				return stamp(list, i)
 			}
 		}
 	}
 	for _, list := range lists {
 		for i := range list.nodes {
 			if strings.EqualFold(list.nodes[i].Name, key) {
-				return &list.nodes[i]
+				return stamp(list, i)
 			}
 		}
 	}

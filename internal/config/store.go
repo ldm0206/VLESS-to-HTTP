@@ -270,14 +270,15 @@ func Default() *Config {
 			Console:    true,
 		},
 		Health: Health{
-			Enabled:        true,
-			ProbeURL:       "https://www.gstatic.com/generate_204",
-			Interval:       Duration(30 * time.Second),
-			Timeout:        Duration(5 * time.Second),
-			Failures:       2,
-			Successes:      1,
-			SwitchCooldown: Duration(15 * time.Second),
-			MaxProbes:      64,
+			Enabled:             true,
+			ProbeURL:            "https://www.gstatic.com/generate_204",
+			Interval:            Duration(30 * time.Second),
+			ObservatoryInterval: Duration(5 * time.Minute),
+			Timeout:             Duration(5 * time.Second),
+			Failures:            2,
+			Successes:           1,
+			SwitchCooldown:      Duration(15 * time.Second),
+			MaxProbes:           64,
 		},
 	}
 }
@@ -332,6 +333,14 @@ func applyDefaults(c *Config) {
 	}
 	if c.Health.Interval <= 0 {
 		c.Health.Interval = def.Health.Interval
+	}
+	if c.Health.ObservatoryInterval <= 0 {
+		c.Health.ObservatoryInterval = def.Health.ObservatoryInterval
+	}
+	if c.Health.ObservatoryInterval < Duration(10*time.Second) {
+		// Xray refuses anything shorter and logs a warning; clamp here so the
+		// panel shows the interval that actually runs.
+		c.Health.ObservatoryInterval = Duration(10 * time.Second)
 	}
 	if c.Health.Timeout <= 0 {
 		c.Health.Timeout = def.Health.Timeout

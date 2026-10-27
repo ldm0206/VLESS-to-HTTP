@@ -282,6 +282,54 @@ func TestSessionAuthAndCSRF(t *testing.T) {
 	}
 }
 
+func TestUserTrafficHistoryEndpoint(t *testing.T) {
+	ts := newTestServer(t)
+	cookie, csrf := ts.login(t, adminPassword)
+	headers := [][2]string{{"X-CSRF-Token", csrf}}
+
+	create := ts.do(t, http.MethodPost, "/api/users", cookie, map[string]any{
+		"name": "alice", "password": "pw", "targets": []any{},
+	}, headers...)
+	if create.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(create.Body)
+		create.Body.Close()
+		t.Fatalf("create = %d %s", create.StatusCode, body)
+	}
+	var created struct {
+		User engine.UserStatus `json:"user"`
+	}
+	decodeBody(t, create, &created)
+
+	resp := ts.do(t, http.MethodGet, "/api/users/"+created.User.ID+"/traffic/history?days=7", cookie, nil)
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("history = %d %s", resp.StatusCode, body)
+	}
+	var payload struct {
+		UserID  string                `json:"user_id"`
+		Name    string                `json:"name"`
+		Days    int                   `json:"days"`
+		Buckets []engine.TrafficPoint `json:"buckets"`
+	}
+	decodeBody(t, resp, &payload)
+	if payload.UserID != created.User.ID || payload.Name != "alice" {
+		t.Fatalf("history identity = %+v", payload)
+	}
+	if payload.Days != 7 {
+		t.Fatalf("days = %d, want 7", payload.Days)
+	}
+	if payload.Buckets == nil {
+		t.Fatal("buckets should be an empty array, not null")
+	}
+
+	missing := ts.do(t, http.MethodGet, "/api/users/usr_missing/traffic/history", cookie, nil)
+	missing.Body.Close()
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown user = %d, want 404", missing.StatusCode)
+	}
+}
+
 func TestAPITokenIsRestrictedToAllowedIPs(t *testing.T) {
 	ts := newTestServer(t)
 	token := ts.store.Get().Panel.APIToken
@@ -383,7 +431,7 @@ func TestSubscriptionImportAndNodeListing(t *testing.T) {
 		"hysteria2://pw@hy.example.com:443#韩国HY2\n"
 
 	resp := ts.do(t, http.MethodPost, "/api/subs/import", cookie, map[string]any{
-		"name": "本地导入", "kind": "v2ray", "content": content,
+		"name": "本地导入", "kind": "v2ray", "content": content, "skip_health": true,
 	}, headers...)
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -399,6 +447,21 @@ func TestSubscriptionImportAndNodeListing(t *testing.T) {
 	}
 	if imported.Sub.CachedUsable != 1 {
 		t.Fatalf("usable = %d, want 1 (hysteria2 is unsupported)", imported.Sub.CachedUsable)
+	}
+	if !imported.Sub.SkipHealth {
+		t.Fatal("imported subscription should keep skip_health")
+	}
+
+	toggle := ts.do(t, http.MethodPatch, "/api/subs/"+imported.Sub.ID, cookie,
+		map[string]any{"skip_health": false}, headers...)
+	if toggle.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(toggle.Body)
+		toggle.Body.Close()
+		t.Fatalf("skip_health update = %d %s", toggle.StatusCode, body)
+	}
+	toggle.Body.Close()
+	if sub := ts.store.Get().FindSub(imported.Sub.ID); sub == nil || sub.SkipHealth {
+		t.Fatalf("skip_health was not cleared: %+v", sub)
 	}
 
 	nodes := ts.do(t, http.MethodGet, "/api/nodes", cookie, nil)

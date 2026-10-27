@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/ldm0206/vless-to-http/internal/config"
 	"github.com/ldm0206/vless-to-http/internal/subscription"
+	"github.com/ldm0206/vless-to-http/internal/xraycore"
 )
 
 // pollLoop refreshes traffic counters and the client-IP map once per second.
@@ -44,6 +46,7 @@ func (e *Engine) pollOnce() {
 
 	e.mu.RLock()
 	inst := e.inst
+	res := e.current
 	e.mu.RUnlock()
 	if inst == nil {
 		return
@@ -51,6 +54,8 @@ func (e *Engine) pollOnce() {
 
 	traffic := inst.UserTraffic(names)
 	online := inst.UserOnline(names)
+	probeNames := probeAccounts(res)
+	probeTraffic := inst.UserTraffic(probeNames)
 	now := time.Now()
 
 	e.trafficMu.Lock()
@@ -59,17 +64,7 @@ func (e *Engine) pollOnce() {
 		if !ok {
 			continue
 		}
-		last := e.lastRaw[name]
-		up := cur.Up - last.Up
-		down := cur.Down - last.Down
-		// A negative delta means the core restarted and the counters were
-		// reset, so the new value is the delta.
-		if up < 0 {
-			up = cur.Up
-		}
-		if down < 0 {
-			down = cur.Down
-		}
+		up, down := counterDelta(e.lastRaw, name, cur)
 		e.lastRaw[name] = cur
 		if up == 0 && down == 0 {
 			continue
@@ -78,6 +73,15 @@ func (e *Engine) pollOnce() {
 		total.Up += up
 		total.Down += down
 		e.totals[id] = total
+		e.addHistory(id, now, up, down)
+		e.dirty = true
+	}
+
+	probeUp, probeDown, probeChanged := sumDeltas(e.probeRaw, probeTraffic)
+	e.probeRaw = probeTraffic
+	if probeChanged {
+		e.probeTotals.Up += probeUp
+		e.probeTotals.Down += probeDown
 		e.dirty = true
 	}
 	e.trafficMu.Unlock()
@@ -95,6 +99,59 @@ func (e *Engine) pollOnce() {
 		}
 	}
 	e.attrMu.Unlock()
+}
+
+// probeAccounts lists the loopback accounts the health prober dials with.
+func probeAccounts(res *resolution) []string {
+	if res == nil {
+		return nil
+	}
+	probes := make([]string, 0, len(res.Plan.Probes))
+	for _, probe := range res.Plan.Probes {
+		probes = append(probes, xraycore.ProbeUser(probe.NodeID))
+	}
+	return probes
+}
+
+// counterDelta turns one counter reading into a per-poll delta. A negative
+// delta means the core restarted and reset its counters, so the new value is
+// the delta.
+func counterDelta(last map[string]xraycore.Traffic, key string, cur xraycore.Traffic) (int64, int64) {
+	prev := last[key]
+	up := cur.Up - prev.Up
+	down := cur.Down - prev.Down
+	if up < 0 {
+		up = cur.Up
+	}
+	if down < 0 {
+		down = cur.Down
+	}
+	return up, down
+}
+
+// sumDeltas folds a whole counter map into one delta pair.
+func sumDeltas(last, cur map[string]xraycore.Traffic) (int64, int64, bool) {
+	var up, down int64
+	for key, value := range cur {
+		du, dd := counterDelta(last, key, value)
+		up += du
+		down += dd
+	}
+	return up, down, up != 0 || down != 0
+}
+
+// addHistory records one poll's bytes in the current hourly bucket.
+func (e *Engine) addHistory(id string, now time.Time, up, down int64) {
+	hour := now.UTC().Truncate(time.Hour).Unix()
+	buckets := e.history[id]
+	if buckets == nil {
+		buckets = map[int64]config.Traffic{}
+		e.history[id] = buckets
+	}
+	bucket := buckets[hour]
+	bucket.Up += up
+	bucket.Down += down
+	buckets[hour] = bucket
 }
 
 // trafficLoop persists accumulated traffic every 30 seconds.
@@ -119,10 +176,16 @@ func (e *Engine) trafficLoop(ctx context.Context) {
 	}
 }
 
+// historyRetention keeps one extra day beyond the 30 shown, so the first
+// local day of a 30-day chart is complete in every timezone.
+const historyRetention = 31 * 24 * time.Hour
+
 type trafficFile struct {
-	Version int                       `json:"version"`
-	Saved   time.Time                 `json:"saved"`
-	Users   map[string]config.Traffic `json:"users"`
+	Version int                                 `json:"version"`
+	Saved   time.Time                           `json:"saved"`
+	Users   map[string]config.Traffic           `json:"users"`
+	History map[string]map[int64]config.Traffic `json:"history,omitempty"`
+	Probe   config.Traffic                      `json:"probe,omitempty"`
 }
 
 func (e *Engine) trafficPath() string {
@@ -146,6 +209,10 @@ func (e *Engine) loadTraffic() error {
 	}
 	e.trafficMu.Lock()
 	e.totals = file.Users
+	if file.History != nil {
+		e.history = file.History
+	}
+	e.probeTotals = file.Probe
 	e.trafficMu.Unlock()
 	return nil
 }
@@ -156,6 +223,25 @@ func (e *Engine) saveTraffic() error {
 	for id, t := range e.totals {
 		snapshot[id] = t
 	}
+	history := make(map[string]map[int64]config.Traffic, len(e.history))
+	cutoff := time.Now().UTC().Add(-historyRetention).Truncate(time.Hour).Unix()
+	for id, buckets := range e.history {
+		// Accounts that were deleted should not leave data behind forever.
+		if e.store.Get().FindUser(id) == nil {
+			delete(e.history, id)
+			continue
+		}
+		keep := make(map[int64]config.Traffic, len(buckets))
+		for hour, t := range buckets {
+			if hour < cutoff {
+				delete(buckets, hour)
+				continue
+			}
+			keep[hour] = t
+		}
+		history[id] = keep
+	}
+	probe := e.probeTotals
 	e.dirty = false
 	e.trafficMu.Unlock()
 
@@ -163,7 +249,13 @@ func (e *Engine) saveTraffic() error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	raw, err := json.MarshalIndent(trafficFile{Version: 1, Saved: time.Now(), Users: snapshot}, "", "  ")
+	raw, err := json.MarshalIndent(trafficFile{
+		Version: 2,
+		Saved:   time.Now(),
+		Users:   snapshot,
+		History: history,
+		Probe:   probe,
+	}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -280,6 +372,35 @@ func (e *Engine) Traffic() map[string]config.Traffic {
 		out[id] = t
 	}
 	return out
+}
+
+// ProbeTraffic returns the bytes our own health probes spent.
+func (e *Engine) ProbeTraffic() config.Traffic {
+	e.trafficMu.Lock()
+	defer e.trafficMu.Unlock()
+	return e.probeTotals
+}
+
+// TrafficHistory returns the account's hourly buckets since the given time,
+// oldest first.
+func (e *Engine) TrafficHistory(id string, since time.Time) []TrafficPoint {
+	e.trafficMu.Lock()
+	defer e.trafficMu.Unlock()
+	buckets := e.history[id]
+	cutoff := since.Unix()
+	points := make([]TrafficPoint, 0, len(buckets))
+	for hour, t := range buckets {
+		if hour < cutoff {
+			continue
+		}
+		points = append(points, TrafficPoint{
+			At:   time.Unix(hour, 0).UTC(),
+			Up:   t.Up,
+			Down: t.Down,
+		})
+	}
+	sort.Slice(points, func(i, j int) bool { return points[i].At.Before(points[j].At) })
+	return points
 }
 
 // OnlineIPs returns the client IPs currently connected per account.

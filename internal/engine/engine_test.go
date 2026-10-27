@@ -183,10 +183,14 @@ func TestEngineProxiesThroughNodeAndFailsOver(t *testing.T) {
 	// Traffic accounting reads the core's counters. This goes through a real
 	// VLESS outbound, which is the path production traffic takes, and there
 	// the core counts both directions while the connection is still open.
+	client.CloseIdleConnections()
 	eng.pollOnce()
 	traffic := eng.Traffic()["usr_1"]
 	if traffic.Up == 0 || traffic.Down == 0 {
 		t.Fatalf("traffic was not counted in both directions: %+v", traffic)
+	}
+	if history := eng.TrafficHistory("usr_1", time.Now().Add(-time.Hour)); len(history) == 0 {
+		t.Fatal("traffic history did not record the connection")
 	}
 
 	// The server goes away: one probe is enough with Failures=1.

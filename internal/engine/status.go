@@ -21,8 +21,16 @@ type Status struct {
 	Dropped   uint64    `json:"dropped_logs"`
 
 	Totals config.Traffic `json:"totals"`
-	Users  []UserStatus   `json:"users"`
-	Subs   []SubStatus    `json:"subs"`
+	// ProbeTraffic is what the health prober spent through the nodes. The
+	// core's auto-mode observatory has no account of its own, so its traffic
+	// cannot be attributed here; ObservatoryNodes says how many nodes it pings
+	// and the panel points the operator at the interval setting.
+	ProbeTraffic        config.Traffic `json:"probe_traffic"`
+	ProbeNodes          int            `json:"probe_nodes"`
+	ObservatoryNodes    int            `json:"observatory_nodes"`
+	ObservatoryInterval string         `json:"observatory_interval,omitempty"`
+	Users               []UserStatus   `json:"users"`
+	Subs                []SubStatus    `json:"subs"`
 
 	NodeSummary NodeSummary `json:"node_summary"`
 }
@@ -35,6 +43,13 @@ type NodeSummary struct {
 	Alive       int `json:"alive"`
 	Dead        int `json:"dead"`
 	InUse       int `json:"in_use"`
+}
+
+// TrafficPoint is one account's traffic in one hour.
+type TrafficPoint struct {
+	At   time.Time `json:"at"`
+	Up   int64     `json:"up"`
+	Down int64     `json:"down"`
 }
 
 // UserStatus is one account as the panels show it.
@@ -108,6 +123,12 @@ func (e *Engine) Status() Status {
 
 	traffic := e.Traffic()
 	online := e.OnlineIPs()
+	st.ProbeTraffic = e.ProbeTraffic()
+	if res != nil {
+		st.ProbeNodes = len(res.ProbeNodes)
+		st.ObservatoryNodes = res.ObservatoryNodes
+		st.ObservatoryInterval = cfg.Health.ObservatoryInterval.String()
+	}
 
 	for i := range cfg.Users {
 		u := &cfg.Users[i]

@@ -202,7 +202,12 @@ func runStatus(g globals, args []string) int {
 	fmt.Printf("HTTP 代理   %v\n", resp.Proxy["http"])
 	fmt.Printf("SOCKS5      %v\n", resp.Proxy["socks"])
 	fmt.Printf("兜底策略    %v\n", fallbackLabel(fmt.Sprint(resp.Proxy["fallback"])))
-	fmt.Printf("累计流量    上行 %s / 下行 %s\n", client.FormatBytes(st.Totals.Up), client.FormatBytes(st.Totals.Down))
+	trafficLine := fmt.Sprintf("累计流量    上行 %s / 下行 %s",
+		client.FormatBytes(st.Totals.Up), client.FormatBytes(st.Totals.Down))
+	if probe := st.ProbeTraffic.Up + st.ProbeTraffic.Down; probe > 0 {
+		trafficLine += "（健康探测另计 " + client.FormatBytes(probe) + "）"
+	}
+	fmt.Println(trafficLine)
 	fmt.Println()
 
 	if len(st.Users) == 0 {
