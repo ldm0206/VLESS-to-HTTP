@@ -217,6 +217,9 @@ func TestVmessTrojanShadowsocks(t *testing.T) {
 	ss := Node{Name: "ss", Type: "ss", Server: "sg.example.com", Port: 8388, Cipher: "chacha20-ietf-poly1305", Password: "pw"}
 	ss.Normalize()
 	ob = decode(t, ss)
+	if ob["protocol"] != "shadowsocks" {
+		t.Fatalf("ss protocol = %v, want shadowsocks", ob["protocol"])
+	}
 	server = dig(t, ob, "settings", "servers").([]any)[0].(map[string]any)
 	if server["method"] != "chacha20-ietf-poly1305" || server["password"] != "pw" {
 		t.Fatalf("ss server = %v", server)

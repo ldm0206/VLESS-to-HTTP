@@ -1,11 +1,38 @@
 package xraycore_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
+	"github.com/ldm0206/vless-to-http/internal/node"
 	"github.com/ldm0206/vless-to-http/internal/xraycore"
+	"github.com/xtls/xray-core/infra/conf/serial"
 )
+
+// TestBuiltConfigLoadsInCore: the core resolves each outbound by the protocol
+// id we emit, and its name does not always match ours (shadowsocks, not ss).
+// Loading the built document through the core's own loader catches a mismatch
+// before it becomes a failed start at runtime.
+func TestBuiltConfigLoadsInCore(t *testing.T) {
+	nodes := []node.Node{
+		{Name: "ss", Type: "ss", Server: "sg.example.com", Port: 8388, Cipher: "aes-128-gcm", Password: "pw"},
+		{Name: "vless", Type: "vless", Server: "jp.example.com", Port: 443, UUID: "b831381d-6324-4d53-ad4f-8cda48b30811"},
+		{Name: "vmess", Type: "vmess", Server: "us.example.com", Port: 443, UUID: "b831381d-6324-4d53-ad4f-8cda48b30811"},
+		{Name: "trojan", Type: "trojan", Server: "hk.example.com", Port: 443, Password: "pw"},
+	}
+	for i := range nodes {
+		nodes[i].Normalize()
+	}
+
+	raw, err := xraycore.BuildJSON(xraycore.Plan{Nodes: nodes})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if _, err := serial.LoadJSONConfig(bytes.NewReader(raw)); err != nil {
+		t.Fatalf("core rejected the built config: %v", err)
+	}
+}
 
 // TestSkipSniffingRulePrecedesCustomRules: an account that opted out of
 // sniffing must be routed before the operator's domain rules, otherwise the

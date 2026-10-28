@@ -197,6 +197,28 @@ func TestParseV2RayLinks(t *testing.T) {
 	}
 }
 
+// Some providers hand out shadowsocks:// links instead of ss://. Both name the
+// same scheme, so the alias must land on the ss parser rather than being
+// recorded as an unknown protocol.
+func TestParseShadowsocksSchemeAlias(t *testing.T) {
+	raw := "shadowsocks://YWVzLTI1Ni1nY206cGFzc3dvcmQ@sg.example.com:8388#别名SS"
+	result, err := Parse([]byte(raw), "auto")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(result.Nodes) != 1 {
+		t.Fatalf("got %d nodes, want 1", len(result.Nodes))
+	}
+	n := result.Nodes[0]
+	if n.Type != "ss" || n.Server != "sg.example.com" || n.Port != 8388 ||
+		n.Cipher != "aes-256-gcm" || n.Password != "password" {
+		t.Fatalf("shadowsocks alias parsed wrong: %+v", n)
+	}
+	if n.Unsupported != "" {
+		t.Fatalf("shadowsocks alias should be usable, got %q", n.Unsupported)
+	}
+}
+
 func TestParsePlainLinksWithoutBase64(t *testing.T) {
 	raw := "vless://abc@a.example.com:443?security=tls&sni=a.example.com&type=tcp#节点A\n" +
 		"# 这是一行注释\n" +

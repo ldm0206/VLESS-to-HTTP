@@ -56,7 +56,7 @@ func parseLink(link string) (*node.Node, error) {
 		return parseStandardURI(scheme, rest)
 	case "vmess":
 		return parseVMessURI(rest)
-	case "ss":
+	case "ss", "shadowsocks":
 		return parseShadowsocksURI(rest)
 	case "socks", "socks5", "http", "https":
 		return parseSocksLikeURI(scheme, rest)

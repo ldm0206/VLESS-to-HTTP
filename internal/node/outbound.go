@@ -14,13 +14,23 @@ func (n *Node) Outbound(tag string) (map[string]any, error) {
 
 	out := map[string]any{
 		"tag":      tag,
-		"protocol": n.Type,
+		"protocol": protocolName(n.Type),
 		"settings": n.settings(),
 	}
 	if stream := n.streamSettings(); len(stream) > 0 {
 		out["streamSettings"] = stream
 	}
 	return out, nil
+}
+
+// protocolName maps the internal type onto the name Xray registers the
+// outbound handler under. Shadowsocks is the only one that differs: the core
+// knows it as "shadowsocks", not "ss".
+func protocolName(typ string) string {
+	if typ == "ss" {
+		return "shadowsocks"
+	}
+	return typ
 }
 
 func (n *Node) settings() map[string]any {
