@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ldm0206/vless-to-http/internal/auth"
 	"github.com/ldm0206/vless-to-http/internal/config"
@@ -532,6 +533,42 @@ func TestSettingsPatchAndSecrecy(t *testing.T) {
 	bad.Body.Close()
 	if bad.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid fallback = %d, want 400", bad.StatusCode)
+	}
+}
+
+// The panel edits the core's connection-idle timeout as a duration string, so
+// the settings view and the patch have to agree on that format.
+func TestSettingsPatchProxyTimeout(t *testing.T) {
+	ts := newTestServer(t)
+	cookie, csrf := ts.login(t, adminPassword)
+	headers := [][2]string{{"X-CSRF-Token", csrf}}
+
+	resp := ts.do(t, http.MethodGet, "/api/settings", cookie, nil)
+	var settings map[string]any
+	decodeBody(t, resp, &settings)
+	proxy, _ := settings["proxy"].(map[string]any)
+	if proxy["timeout"] != "5m0s" {
+		t.Fatalf("settings proxy.timeout = %v, want 5m0s", proxy["timeout"])
+	}
+
+	resp = ts.do(t, http.MethodPatch, "/api/settings", cookie,
+		map[string]any{"proxy": map[string]any{"timeout": "15m"}}, headers...)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch = %d", resp.StatusCode)
+	}
+	if got := ts.store.Get().Proxy.Timeout.D(); got != 15*time.Minute {
+		t.Fatalf("proxy timeout = %v, want 15m", got)
+	}
+
+	bad := ts.do(t, http.MethodPatch, "/api/settings", cookie,
+		map[string]any{"proxy": map[string]any{"timeout": "soon"}}, headers...)
+	bad.Body.Close()
+	if bad.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid timeout = %d, want 400", bad.StatusCode)
+	}
+	if got := ts.store.Get().Proxy.Timeout.D(); got != 15*time.Minute {
+		t.Fatalf("a rejected patch changed the timeout to %v", got)
 	}
 }
 

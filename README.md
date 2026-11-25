@@ -322,7 +322,7 @@ v2h core config                          # 看内核实际拿到的配置（排�
 | `proxy.fallback` | `reject` | 全局兜底：`reject` 拒绝连接，`direct` 直连 |
 | `proxy.dns_servers` | 空 | 内核使用的 DNS 服务器，留空用系统 DNS |
 | `proxy.custom_rules` | 空 | 原样插入 Xray 路由规则（排在按账号分流之前），只能手改文件 |
-| `proxy.timeout` | `300s` | 连接超时，Go duration 写法 |
+| `proxy.timeout` | `300s` | 内核的连接空闲上限（Xray 的 connIdle）：一条连接连续 5 分钟没有任何上下行流量就被断开；面板可改 |
 
 ### `logs` / `health`
 

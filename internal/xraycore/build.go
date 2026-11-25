@@ -53,10 +53,12 @@ type Observatory struct {
 
 // Plan is everything the config builder needs; the engine fills it in.
 type Plan struct {
-	HTTP        ListenSpec
-	SOCKS       ListenSpec
-	SocksUDP    bool
-	Sniffing    bool
+	HTTP     ListenSpec
+	SOCKS    ListenSpec
+	SocksUDP bool
+	Sniffing bool
+	// Timeout is the core's connection-idle policy, in seconds. The inbounds
+	// have no timeout of their own, so this is the only place it can land.
 	Timeout     int
 	DNSServers  []string
 	CustomRules []map[string]any
@@ -158,7 +160,6 @@ func (p Plan) inbounds() []any {
 			"protocol": "http",
 			"settings": map[string]any{
 				"accounts":  accounts,
-				"timeout":   p.Timeout,
 				"userLevel": 0,
 			},
 		}

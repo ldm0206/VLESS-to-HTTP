@@ -914,7 +914,7 @@ type proxyInput struct {
 	Sniffing   *bool                 `json:"sniffing"`
 	Fallback   *string               `json:"fallback"`
 	DNSServers *[]string             `json:"dns_servers"`
-	TimeoutSec *int                  `json:"timeout_sec"`
+	Timeout    *string               `json:"timeout"`
 }
 
 type logsInput struct {
@@ -999,8 +999,14 @@ func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
 			if in.Proxy.DNSServers != nil {
 				c.Proxy.DNSServers = *in.Proxy.DNSServers
 			}
-			if in.Proxy.TimeoutSec != nil && *in.Proxy.TimeoutSec > 0 {
-				c.Proxy.Timeout = config.Duration(time.Duration(*in.Proxy.TimeoutSec) * time.Second)
+			if in.Proxy.Timeout != nil && *in.Proxy.Timeout != "" {
+				d, err := time.ParseDuration(*in.Proxy.Timeout)
+				if err != nil {
+					return fmt.Errorf("时间格式不正确：%q", *in.Proxy.Timeout)
+				}
+				if d > 0 {
+					c.Proxy.Timeout = config.Duration(d)
+				}
 			}
 		}
 

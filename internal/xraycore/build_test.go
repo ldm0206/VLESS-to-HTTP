@@ -78,3 +78,42 @@ func TestSkipSniffingRulePrecedesCustomRules(t *testing.T) {
 		t.Fatalf("normal user rule order changed: %+v", rules)
 	}
 }
+
+// The core dropped the http inbound's own "timeout" setting, so the policy
+// block is the only place a value can still take effect. Emitting the dead
+// field would make the generated config claim an idle limit it does not have.
+func TestHTTPInboundCarriesNoTimeoutOfItsOwn(t *testing.T) {
+	plan := xraycore.Plan{
+		HTTP:    xraycore.ListenSpec{Enabled: true, Listen: "127.0.0.1:8080"},
+		Timeout: 900,
+		Users:   []xraycore.PlanUser{{Name: "alice", Password: "pw", OutboundTag: xraycore.DirectTag}},
+	}
+
+	raw, err := xraycore.BuildJSON(plan)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	var doc struct {
+		Policy struct {
+			Levels map[string]map[string]any `json:"levels"`
+		} `json:"policy"`
+		Inbounds []struct {
+			Tag      string         `json:"tag"`
+			Settings map[string]any `json:"settings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got, _ := doc.Policy.Levels["0"]["connIdle"].(float64); int(got) != 900 {
+		t.Fatalf("connIdle = %v, want 900", doc.Policy.Levels["0"]["connIdle"])
+	}
+	for _, in := range doc.Inbounds {
+		if in.Tag != xraycore.HTTPInTag {
+			continue
+		}
+		if _, dead := in.Settings["timeout"]; dead {
+			t.Fatalf("http inbound still carries a timeout setting: %v", in.Settings)
+		}
+	}
+}

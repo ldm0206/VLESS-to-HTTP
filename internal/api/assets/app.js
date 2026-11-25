@@ -2755,6 +2755,7 @@
       return el('option', { value: f, selected: proxy.fallback === f ? true : null, text: fallbackLabel(f) + '（' + f + '）' });
     }));
     var dnsInput = el('input', { type: 'text', value: (proxy.dns_servers || []).join(', '), placeholder: '1.1.1.1, 8.8.8.8' });
+    var timeoutInput = el('input', { type: 'text', value: proxy.timeout || '5m0s', placeholder: '5m0s' });
 
     var save = saveButton(function () {
       var dns = dnsInput.value.split(',').map(function (x) { return x.trim(); }).filter(function (x) { return !!x; });
@@ -2765,7 +2766,8 @@
             socks: { enabled: !!socksEnabled.checked, listen: socksListen.value.trim(), udp: !!socksUDP.checked },
             sniffing: !!sniffing.checked,
             fallback: fallbackSelect.value,
-            dns_servers: dns
+            dns_servers: dns,
+            timeout: timeoutInput.value.trim()
           }
         }).then(applySaved);
       });
@@ -2785,7 +2787,9 @@
       ]),
       toggleRow('允许 UDP（SOCKS5）', socksUDP),
       el('div', { class: 'divider' }),
+      sectionHead('连接', '内核对每条代理连接的限制，改完会重启内核。'),
       el('div', { class: 'form-grid' }, [
+        field('空闲超时', timeoutInput, '一条连接连续这么久没有任何上下行流量，内核就断开它（Xray 的 connIdle）。写法如 300s、5m。'),
         field('兜底策略', fallbackSelect, '账号没有自己的兜底设置时使用这里的策略。'),
         field('DNS 服务器', dnsInput, '逗号分隔，例如 1.1.1.1, 8.8.8.8；用于内核解析域名。')
       ]),
